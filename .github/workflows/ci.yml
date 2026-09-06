@@ -53,12 +53,6 @@ jobs:
             --cmake-args -DBUILD_TESTING=ON \
             --event-handlers console_cohesion+
 
-      - name: Run quick-start smoke test
-        run: |
-          source /opt/ros/${{ matrix.ros_distro }}/setup.sh
-          source install/local_setup.bash
-          bash tools/quick_test.sh
-
       - name: Test
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.sh
@@ -71,3 +65,14 @@ jobs:
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.sh
           colcon test-result --verbose
+
+      # Last, deliberately. It launches real nodes, so it is the slowest and the
+      # most environment-dependent step, and a failure here must not skip the
+      # unit tests: when it ran before them a smoke failure hid which tests
+      # passed, which cost a diagnosis round trip on the PR that added it.
+      - name: Run quick-start smoke test
+        timeout-minutes: 5
+        run: |
+          source /opt/ros/${{ matrix.ros_distro }}/setup.sh
+          source install/local_setup.bash
+          bash tools/quick_test.sh
