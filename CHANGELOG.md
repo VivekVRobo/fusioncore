@@ -8,6 +8,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **`heading_observable_distance` was hardcoded at 5 m and unreachable from any config.** It is what flips `heading_validated`, and there was no `declare_parameter` for it, so no YAML could change it. `gnss.track_heading_min_dist` looks like the knob for this but gates something different: whether a track heading gets *fused*. A rover configured with `track_heading_min_dist: 15.0` still validated its heading at **5.04 m**, carrying **48.6 degrees** of heading uncertainty at that moment. Track heading is the bearing between two fixes, so its error is roughly GPS sigma over distance travelled, and at 6 m sigma over a 5 m baseline that is radians rather than degrees. Now exposed as `gnss.heading_observable_distance`, default unchanged at 5.0 so no existing setup shifts.
+
+  Writing the test for it turned up the reason this was confusing. There are **two independent routes** to `heading_validated` from GPS track: the distance gate at `fusioncore.cpp:490`, and `fusioncore.cpp:1168`, which validates as a side effect whenever a track heading is actually fused, gated by `gps_track_heading_min_dist` instead. Whichever fires first wins, so raising one alone does nothing if the other is still small. The first version of the new test measured the wrong gate and reported the config as ignored when it was simply being beaten to it. `test_heading_observable_distance.cpp` now pins both paths and documents the interaction.
+
+
 ---
 
 ## [0.3.8]: 2026-09-01

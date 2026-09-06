@@ -295,6 +295,19 @@ public:
     declare_parameter("gnss.recovery_rejection_n",  0);
     declare_parameter("gnss.p_inflate_sigma",       50.0);
     declare_parameter("gnss.recovery_timeout_s",    0.0);
+    // How far the robot must travel before heading is declared observable and
+    // heading_validated flips true. This was hardcoded at 5.0 and unreachable
+    // from YAML: setting gnss.track_heading_min_dist looked like it controlled
+    // this but gates only whether track heading is FUSED, so a config asking for
+    // 15 m still validated at 5. Measured on a rover 2026-09-05: validated at
+    // 5.04 m carrying 48.6 degrees of heading uncertainty, because track heading
+    // is a bearing between two fixes and its error is roughly
+    // (GPS sigma / distance). At 6 m sigma over a 5 m baseline that is radians.
+    //
+    // Default stays 5.0 so no existing setup changes behaviour. Raise it when
+    // your GPS sigma is large: 15 m of travel against 6 m sigma is about
+    // 23 degrees, which is a heading worth believing.
+    declare_parameter("gnss.heading_observable_distance", 5.0);
     declare_parameter("gnss.track_heading_enabled",   true);
     declare_parameter("gnss.track_heading_min_dist",  5.0);
     declare_parameter("gnss.track_heading_max_sigma", 0.4);
@@ -564,6 +577,7 @@ public:
     config.gnss_recovery_rejection_n  = get_parameter("gnss.recovery_rejection_n").as_int();
     config.gnss_p_inflate_sigma       = get_parameter("gnss.p_inflate_sigma").as_double();
     config.gnss_recovery_timeout_s    = get_parameter("gnss.recovery_timeout_s").as_double();
+    config.heading_observable_distance     = get_parameter("gnss.heading_observable_distance").as_double();
     config.gps_track_heading_enabled       = get_parameter("gnss.track_heading_enabled").as_bool();
     config.gps_track_heading_min_dist      = get_parameter("gnss.track_heading_min_dist").as_double();
     config.gps_track_heading_max_sigma     = get_parameter("gnss.track_heading_max_sigma").as_double();
