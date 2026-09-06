@@ -1122,6 +1122,15 @@ bool FusionCore::apply_gnss_update(
   gnss_debug_.track_heading_skipped_motion          =
       !have_stronger_heading && !motion_suits_track_heading;
 
+  gnss_debug_.track_heading_sigma_rad = -1.0;
+  if (!config_.gps_track_heading_enabled) {
+    gnss_debug_.track_heading_state = TrackHeadingState::NOT_ATTEMPTED;
+  } else if (have_stronger_heading) {
+    gnss_debug_.track_heading_state = TrackHeadingState::STRONGER_SOURCE;
+  } else if (!motion_suits_track_heading) {
+    gnss_debug_.track_heading_state = TrackHeadingState::MOTION_UNSUITABLE;
+  }
+
   if (config_.gps_track_heading_enabled &&
       !have_stronger_heading &&
       motion_suits_track_heading) {
@@ -1135,9 +1144,20 @@ bool FusionCore::apply_gnss_update(
       double dy   = fix.y - last_hdg_fix_y_;
       double dist = std::sqrt(dx*dx + dy*dy);
 
+      gnss_debug_.track_heading_baseline_m = dist;
+
+      if (dist < config_.gps_track_heading_min_dist) {
+        gnss_debug_.track_heading_state = TrackHeadingState::BASELINE_SHORT;
+      }
+
       if (dist >= config_.gps_track_heading_min_dist) {
         double sigma_xy  = std::sqrt((R_meas(0,0) + R_meas(1,1)) * 0.5);
         double sigma_hdg = sigma_xy / dist;
+        gnss_debug_.track_heading_sigma_rad = sigma_hdg;
+
+        if (sigma_hdg > config_.gps_track_heading_max_sigma) {
+          gnss_debug_.track_heading_state = TrackHeadingState::SIGMA_HIGH;
+        }
 
         if (sigma_hdg <= config_.gps_track_heading_max_sigma) {
           sensors::GnssHdgMeasurement z_hdg;
@@ -1162,6 +1182,9 @@ bool FusionCore::apply_gnss_update(
               z_hdg, sensors::gnss_hdg_measurement_function, R_hdg, innov_pre, S_pre, HDG_ANGLE_DIMS);
             fuse = !is_outlier<sensors::GNSS_HDG_DIM>(innov_pre, S_pre, config_.outlier_threshold_hdg);
           }
+
+          gnss_debug_.track_heading_state =
+            fuse ? TrackHeadingState::FUSED : TrackHeadingState::CHI2_FAILED;
 
           if (fuse) {
             ukf_.update<sensors::GNSS_HDG_DIM>(

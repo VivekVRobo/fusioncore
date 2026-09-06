@@ -29,3 +29,12 @@ float64 position_sigma_y
 # Lever arm observability at the time of this fix
 bool    lever_arm_used      # true if lever arm correction was applied
 float64 heading_sigma_deg   # heading 1-sigma (degrees) used to decide lever arm eligibility
+
+# Why GPS track heading did or did not fuse on this fix:
+#   NOT_ATTEMPTED | FUSED | STRONGER_SOURCE | MOTION_UNSUITABLE | BASELINE_SHORT
+#   | SIGMA_HIGH | CHI2_FAILED
+# On a rover with no magnetometer and no dual antenna this is the ONLY thing that
+# bounds yaw, and when it silently declines the whole filter degrades behind it.
+string  track_heading_state
+float64 track_heading_baseline_m   # displacement since the reference fix (m)
+float64 track_heading_sigma_rad    # sigma_xy/baseline, -1.0 if not computed

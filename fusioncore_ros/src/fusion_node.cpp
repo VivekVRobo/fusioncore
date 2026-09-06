@@ -2532,6 +2532,21 @@ private:
     return "NOT_PROCESSED";
   }
 
+  // Converts a TrackHeadingState enum to the string stored in the message.
+  static std::string track_heading_state_str(fusioncore::TrackHeadingState s)
+  {
+    switch (s) {
+      case fusioncore::TrackHeadingState::NOT_ATTEMPTED:     return "NOT_ATTEMPTED";
+      case fusioncore::TrackHeadingState::FUSED:             return "FUSED";
+      case fusioncore::TrackHeadingState::STRONGER_SOURCE:   return "STRONGER_SOURCE";
+      case fusioncore::TrackHeadingState::MOTION_UNSUITABLE: return "MOTION_UNSUITABLE";
+      case fusioncore::TrackHeadingState::BASELINE_SHORT:    return "BASELINE_SHORT";
+      case fusioncore::TrackHeadingState::SIGMA_HIGH:        return "SIGMA_HIGH";
+      case fusioncore::TrackHeadingState::CHI2_FAILED:       return "CHI2_FAILED";
+    }
+    return "NOT_ATTEMPTED";
+  }
+
   static std::string mag_reason_str(fusioncore::MagRejectionReason r)
   {
     switch (r) {
@@ -2567,6 +2582,9 @@ private:
     msg.position_sigma_y = d.position_sigma_y;
     msg.lever_arm_used   = d.lever_arm_used;
     msg.heading_sigma_deg = d.heading_sigma_deg;
+    msg.track_heading_state       = track_heading_state_str(d.track_heading_state);
+    msg.track_heading_baseline_m  = d.track_heading_baseline_m;
+    msg.track_heading_sigma_rad   = d.track_heading_sigma_rad;
 
     gnss_status_pub_->publish(msg);
   }

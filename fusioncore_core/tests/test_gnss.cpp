@@ -524,3 +524,98 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+// ─── GPS track heading reports WHY it did not fuse ───────────────────────────
+//
+// This exists because of the 2026-09-06 field run. Yaw 1-sigma reached 101 deg,
+// which disabled the lever arm (0 of 222 fixes), inflated the position covariance
+// to 5.25 m, drove NIS to 0.20 against an honest 3.0, and left the chi2 outlier
+// gate 39x away from ever firing. The whole cascade came from track heading
+// silently declining to fuse, and the bag could not say which gate stopped it:
+// two booleans covered "a stronger source owns heading" and "the motion is
+// unsuitable", but the two cases that actually applied, a baseline shorter than
+// track_heading_min_dist and a bearing sigma over the limit, were recorded
+// nowhere. Diagnosing it took a day of replaying and reading source.
+
+namespace {
+// Drive east in a straight line, feeding GNSS fixes and matching wheel odometry,
+// then report what the filter says about track heading on the last fix.
+TrackHeadingState run_track_heading(double min_dist, double max_sigma,
+                                    double fix_sigma, double step_m,
+                                    int steps, double* baseline_out = nullptr)
+{
+  FusionCoreConfig cfg;
+  cfg.gps_track_heading_enabled  = true;
+  cfg.gps_track_heading_min_dist = min_dist;
+  cfg.gps_track_heading_max_sigma = max_sigma;
+  cfg.gps_track_heading_min_speed = 0.1;
+  cfg.gps_track_heading_max_yaw_rate = 1.0;
+  cfg.outlier_rejection = false;
+
+  FusionCore fc(cfg);
+  State s0;
+  fc.init(s0, 0.0);
+
+  const double dt = 1.0;
+  double t = 0.0, x = 0.0;
+  for (int i = 0; i < steps; ++i) {
+    t += dt;
+    // Encoder motion so the speed gate is satisfied and the filter is moving.
+    fc.update_encoder(t, step_m / dt, 0.0, 0.0);
+    x += step_m;
+    sensors::GnssFix fix;
+    fix.x = x; fix.y = 0.0; fix.z = 0.0;
+    fix.sigma_xy = fix.sigma_z = fix_sigma;
+    // hdop/vdop scale the noise model, and the sigma gate reads the R the filter
+    // actually built rather than this field. Leaving them at the 99.0 default
+    // makes R enormous and every case reports SIGMA_HIGH, so mirror what the ROS
+    // node does with a covariance-bearing fix and put the metres here too.
+    fix.hdop = fix.vdop = fix_sigma;
+    fix.fix_type = sensors::GnssFixType::RTK_FLOAT; fix.satellites = 12;
+    fc.update_gnss(t, fix);
+  }
+  if (baseline_out) *baseline_out = fc.get_gnss_debug().track_heading_baseline_m;
+  return fc.get_gnss_debug().track_heading_state;
+}
+}  // namespace
+
+TEST(GNSSTest, TrackHeadingReportsBaselineTooShort) {
+  // 1 m per fix against a 15 m minimum: the baseline never gets there, and before
+  // this change the bag simply showed nothing at all.
+  double baseline = -1.0;
+  EXPECT_EQ(run_track_heading(15.0, 0.4, 1.0, 1.0, 5, &baseline),
+            TrackHeadingState::BASELINE_SHORT);
+  EXPECT_GT(baseline, 0.0) << "the baseline actually reached must be reported";
+  EXPECT_LT(baseline, 15.0);
+}
+
+TEST(GNSSTest, TrackHeadingReportsSigmaTooHigh) {
+  // Baseline is long enough, but the bearing the geometry implies is worse than
+  // the gate allows. This is the field case, and it was previously invisible.
+  // The threshold is deliberately far from the boundary so the test asserts the
+  // reported STATE and does not quietly become a test of the noise model.
+  EXPECT_EQ(run_track_heading(5.0, 1e-6, 3.24, 5.0, 4),
+            TrackHeadingState::SIGMA_HIGH);
+}
+
+TEST(GNSSTest, TrackHeadingReportsFusedWhenItActuallyFires) {
+  // Same geometry with the sigma gate opened wide: it fuses. Paired with the test
+  // above this proves the states are distinguishing a real condition rather than
+  // reporting one stuck value.
+  EXPECT_EQ(run_track_heading(5.0, 1e6, 3.24, 5.0, 4),
+            TrackHeadingState::FUSED);
+}
+
+TEST(GNSSTest, TrackHeadingReportsDisabled) {
+  FusionCoreConfig cfg;
+  cfg.gps_track_heading_enabled = false;
+  FusionCore fc(cfg);
+  State s0;
+  fc.init(s0, 0.0);
+  sensors::GnssFix fix;
+  fix.x = 1.0; fix.sigma_xy = fix.sigma_z = 1.0;
+  fix.fix_type = sensors::GnssFixType::RTK_FLOAT; fix.satellites = 12;
+  fc.update_gnss(1.0, fix);
+  EXPECT_EQ(fc.get_gnss_debug().track_heading_state,
+            TrackHeadingState::NOT_ATTEMPTED);
+}

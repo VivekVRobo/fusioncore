@@ -291,6 +291,28 @@ enum class GnssRejectionReason {
   SIGMA_Z_HIGH    = 10, // reported vertical sigma in METRES > max_sigma_z
 };
 
+// Why GPS track heading did or did not fuse on a given fix.
+//
+// Heading has no absolute source on a rover with no magnetometer, no dual antenna
+// and an IMU that publishes orientation as invalid, so GPS track is the only thing
+// that can bound yaw. When it silently declines to fire, yaw uncertainty grows
+// without limit, and that single number then disables the lever arm, inflates the
+// position covariance and drives NIS low enough that the chi2 outlier gate can no
+// longer fire. Measured on the 2026-09-06 field run: yaw 1-sigma reached 101 deg,
+// the lever arm was applied on 0 of 222 fixes, and the largest innovation of the
+// whole run sat 39x below the rejection threshold. Two booleans already recorded
+// part of this and were never published, so a bag could not say which gate was
+// responsible. This enum covers every branch and is published.
+enum class TrackHeadingState {
+  NOT_ATTEMPTED    = 0,  // feature disabled, or no fix processed yet
+  FUSED            = 1,  // a heading measurement was applied to the filter
+  STRONGER_SOURCE  = 2,  // dual antenna / magnetometer / IMU orientation already owns heading
+  MOTION_UNSUITABLE = 3, // too slow, or turning faster than track_heading_max_yaw_rate
+  BASELINE_SHORT   = 4,  // displacement since the reference fix < track_heading_min_dist
+  SIGMA_HIGH       = 5,  // sigma_xy/dist > track_heading_max_sigma, bearing too uncertain
+  CHI2_FAILED      = 6,  // bearing computed but rejected as an outlier
+};
+
 // Why a magnetometer reading was rejected (or ACCEPTED if it passed).
 enum class MagRejectionReason {
   NOT_PROCESSED    = 0,
@@ -311,6 +333,11 @@ struct GnssFixDebug {
   // zig-zag path and had no way to tell which heading source caused it.
   bool               track_heading_skipped_stronger_source = false;
   bool               track_heading_skipped_motion          = false;
+  // The same question answered completely, including the two cases the booleans
+  // above never covered: baseline too short, and bearing sigma too high.
+  TrackHeadingState  track_heading_state = TrackHeadingState::NOT_ATTEMPTED;
+  double             track_heading_baseline_m = 0.0;  // displacement since the reference fix
+  double             track_heading_sigma_rad  = 0.0;  // sigma_xy/dist, -1 if not computed
   double             hdop               = 0.0;
   double             vdop               = 0.0;
   int                satellites         = 0;
