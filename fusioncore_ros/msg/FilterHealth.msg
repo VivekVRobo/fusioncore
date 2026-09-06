@@ -16,6 +16,11 @@ float64 position_sigma_z
 float64 heading_sigma_deg
 
 # Heading observability
+# True once heading COULD be observable, which is not the same as known: it is set
+# on distance travelled alone (gnss.heading_observable_distance), without checking
+# that any heading measurement was ever fused. Read heading_sigma_deg above to find
+# out whether heading is actually known. A run on 2026-09-06 reported
+# heading_validated true with a yaw 1-sigma of 101 degrees for its whole duration.
 bool   heading_validated
 string heading_source  # NONE | GPS_TRACK | IMU_ORIENTATION | DUAL_ANTENNA | MAGNETOMETER
 
