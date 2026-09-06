@@ -141,6 +141,8 @@ ros2 topic pub /odom/wheels nav_msgs/msg/Odometry "{
 }" --rate 50 >/dev/null 2>&1 &
 PIDS+=($!)
 
+# A floor, not the whole wait: check_topic below retries for up to 40 s each, so
+# a slow machine is handled there rather than by guessing a number here.
 info "Waiting 6 s for filter to initialize..."
 sleep 6
 
@@ -158,11 +160,23 @@ echo "  -------"
 # anyone testing only on Jazzy. `timeout N` is portable and does the same job.
 check_topic() {
     local topic="$1" label="$2"
-    if timeout 5 ros2 topic echo "${topic}" --once >/dev/null 2>&1; then
-        pass "${label}"
-    else
-        fail "${label}  (topic: ${topic})"
-    fi
+    # Retries rather than asking once. FusionCore advertises its services at
+    # activation but only PUBLISHES once sensor data has arrived and the filter
+    # has initialised, and how long that takes depends entirely on the machine.
+    # On a cold CI runner the fixed 6 s wait above was not enough: all three
+    # topic checks failed 0.35 s apart, which is `ros2 topic echo` erroring out
+    # because the topic had no publisher yet, not a timeout. The service check
+    # passed in the same run, which is what pointed at initialisation rather than
+    # at discovery being broken.
+    local i
+    for i in 1 2 3 4 5 6 7 8; do
+        if timeout 3 ros2 topic echo "${topic}" --once >/dev/null 2>&1; then
+            pass "${label}"
+            return
+        fi
+        sleep 2
+    done
+    fail "${label}  (topic: ${topic})"
 }
 
 check_topic /fusion/odom  "/fusion/odom publishing (main output)"
