@@ -82,6 +82,28 @@ struct GnssParams {
   // mode that has bitten this project repeatedly.
   double outlier_sigma_xy = 0.0;
 
+  // Largest plausible SECOND DIFFERENCE between consecutive fixes, in METRES.
+  // Zero (the default) disables the check.
+  //
+  // This exists because the chi2 gate structurally cannot see a metre-scale
+  // spike. That gate tests a fix against the FILTER, so its scale is
+  // S = H P H' + R, tens of square metres for a consumer receiver, and on the
+  // 2026-09-06 rover log a spike had to exceed 29 m before it was rejected while
+  // an accepted 15 m spike moved position 4.5 m. Neither a better gate R nor a
+  // perfect heading fixes that: heading actually made it slightly worse.
+  //
+  // Continuity asks a different question, one that never touches P: does this fix
+  // agree with the two fixes either side of it? A spike breaks that badly.
+  // Measured on the same log, the median second difference of a good fix is
+  // 0.171 m, so a 10 m spike is roughly 58 times the normal scale. Invisible to
+  // chi2, unmissable here.
+  //
+  // Set it WELL above the figure tools/nis_from_bag.py reports, because the second
+  // difference also contains real acceleration and the cost of being wrong is
+  // rejecting good fixes, which is the failure that has cost this project most.
+  // On a 0.171 m receiver, 2.0 to 3.0 is generous and still catches a 10 m spike.
+  double continuity_max_m = 0.0;
+
   double base_noise_xy = 1.0;
   double base_noise_z  = 2.0;
   double heading_noise = 0.02;

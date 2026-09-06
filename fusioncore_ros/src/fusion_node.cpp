@@ -193,6 +193,7 @@ public:
     declare_parameter("gnss.max_speed_drift_k", 3.0);
     declare_parameter("gnss.max_sigma_xy",   25.0);
     declare_parameter("gnss.outlier_sigma_xy", 0.0);
+    declare_parameter("gnss.continuity_max_m", 0.0);
     declare_parameter("gnss.max_sigma_z",    50.0);
     declare_parameter("gnss.min_satellites", 4);
     // Minimum fix type for GNSS fusion: 1=GPS, 2=DGPS, 3=RTK_FLOAT, 4=RTK_FIXED
@@ -491,6 +492,7 @@ public:
     max_vdop_                  = config.gnss.max_vdop;
     config.gnss.max_sigma_xy   = get_parameter("gnss.max_sigma_xy").as_double();
     config.gnss.outlier_sigma_xy = get_parameter("gnss.outlier_sigma_xy").as_double();
+    config.gnss.continuity_max_m = get_parameter("gnss.continuity_max_m").as_double();
     config.gnss.max_sigma_z    = get_parameter("gnss.max_sigma_z").as_double();
     max_sigma_xy_              = config.gnss.max_sigma_xy;
     max_sigma_z_               = config.gnss.max_sigma_z;
@@ -2592,6 +2594,7 @@ private:
       // so did our own live_monitor.py during the 2026-08-03 field run.
       case fusioncore::GnssRejectionReason::IMPLAUSIBLE_JUMP: return "IMPLAUSIBLE_JUMP";
       case fusioncore::GnssRejectionReason::SIGMA_XY_HIGH:   return "SIGMA_XY_HIGH";
+      case fusioncore::GnssRejectionReason::CONTINUITY_BREAK: return "CONTINUITY_BREAK";
       case fusioncore::GnssRejectionReason::SIGMA_Z_HIGH:    return "SIGMA_Z_HIGH";
       case fusioncore::GnssRejectionReason::NOT_PROCESSED:   return "NOT_PROCESSED";
     }

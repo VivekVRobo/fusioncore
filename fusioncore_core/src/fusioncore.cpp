@@ -970,6 +970,34 @@ bool FusionCore::apply_gnss_update(
     : std::function<sensors::GnssPosMeasurement(const StateVector&)>(
         sensors::gnss_pos_measurement_function);
 
+  // Fix-to-fix continuity, checked BEFORE chi2 because it is the test that can
+  // actually see a metre-scale spike. chi2 compares a fix against the filter, so
+  // its scale is S = H P H' + R and nothing under about 25 m looks surprising on
+  // a consumer receiver. This compares a fix against the two before it, which
+  // never involves P at all. See GnssParams::continuity_max_m.
+  if (config_.gnss.continuity_max_m > 0.0 && cont_t2_ >= 0.0) {
+    const double dt1 = cont_t1_ - cont_t2_;
+    const double dt2 = timestamp_seconds - cont_t1_;
+    // Only when the three fixes are evenly spaced. Across a gap the second
+    // difference is legitimately large, and rejecting the first fix after an
+    // outage is exactly the failure gnss_coast_min_gap_s exists to avoid.
+    if (dt1 > 1e-6 && dt2 > 1e-6 && dt2 <= 2.0 * dt1 && dt2 >= 0.5 * dt1) {
+      const double r = dt2 / dt1;
+      // Where the fix should be if the receiver kept moving as it was.
+      const double px = cont_x1_ + (cont_x1_ - cont_x2_) * r;
+      const double py = cont_y1_ + (cont_y1_ - cont_y2_) * r;
+      const double resid = std::hypot(fix.x - px, fix.y - py);
+      if (resid > config_.gnss.continuity_max_m) {
+        gnss_debug_.accepted = false;
+        gnss_debug_.reason   = GnssRejectionReason::CONTINUITY_BREAK;
+        last_gnss_rejection_reason_ = gnss_debug_.reason;
+        ++gnss_outliers_;
+        ++gnss_consecutive_rejects_;
+        return false;
+      }
+    }
+  }
+
   if (config_.outlier_rejection) {
     sensors::GnssPosMeasurement innovation_pre;
     sensors::GnssPosNoiseMatrix S;
@@ -1085,6 +1113,11 @@ bool FusionCore::apply_gnss_update(
   } else {
     gnss_debug_.mahalanobis_sq = -1.0;
   }
+
+  // Only accepted fixes become the continuity reference, so a rejected spike can
+  // never poison the baseline that judges the next fix.
+  cont_x2_ = cont_x1_; cont_y2_ = cont_y1_; cont_t2_ = cont_t1_;
+  cont_x1_ = fix.x;    cont_y1_ = fix.y;    cont_t1_ = timestamp_seconds;
 
   // GPS accepted normally: exit coast mode and reset counter
   if (gnss_in_coast_) {

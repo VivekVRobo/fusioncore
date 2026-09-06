@@ -727,3 +727,91 @@ TEST(GNSSTest, ChiSquaredGateCannotSeeMetreScaleSpikes) {
   EXPECT_FALSE(spike_rejected(10.0, 0.5))
       << "a better gate R alone does not reach 10 m either";
 }
+
+// ─── Fix-to-fix continuity catches what chi2 structurally cannot ─────────────
+//
+// chi2 compares a fix against the FILTER, so its scale is S = H P H' + R. On a
+// consumer receiver that is tens of square metres and nothing under about 25 m
+// looks surprising: measured on the 2026-09-06 rover log, rejection began between
+// 29 and 30 m while an accepted 15 m spike moved position 4.5 m. Neither a better
+// gate R nor a perfect heading fixes it; heading made it slightly worse.
+//
+// Continuity asks whether a fix agrees with the two fixes either side of it,
+// which never involves P. Measured across 2361 fixes from seven field logs, the
+// second difference of a good fix has a median of 0.09 to 0.30 m and a p99 under
+// 2.1 m, so a 3 m limit sits 10 to 30 times above normal. At that setting the
+// only rejections across all seven logs were 5 fixes in one 2026-07 log whose
+// second difference reached 4.42 m, 27 times that log's median, which is an
+// outlier by any definition.
+namespace {
+// Fixes every second along a straight line, with one displaced by `spike`.
+// Returns true if the displaced fix was rejected.
+bool continuity_rejects(double spike, double continuity_max_m) {
+  FusionCoreConfig cfg;
+  cfg.outlier_rejection = true;
+  cfg.gnss.continuity_max_m = continuity_max_m;
+  cfg.gnss_max_speed = 0.0;
+  FusionCore fc(cfg);
+  State s0;
+  fc.init(s0, 0.0);
+  double t = 0.0, x = 0.0;
+  auto feed = [&](double ex) {
+    sensors::GnssFix f;
+    f.x = ex; f.y = 0.0; f.z = 0.0;
+    f.sigma_xy = f.sigma_z = 3.24;
+    f.hdop = f.vdop = 3.24;
+    f.fix_type = sensors::GnssFixType::RTK_FLOAT;
+    f.satellites = 12;
+    return fc.update_gnss(t, f);
+  };
+  for (int i = 0; i < 10; ++i) { t += 1.0; x += 0.4; feed(x); }
+  t += 1.0; x += 0.4;
+  return !feed(x + spike);
+}
+}  // namespace
+
+TEST(GNSSTest, ContinuityDefaultsOff) {
+  EXPECT_FALSE(continuity_rejects(10.0, 0.0))
+      << "zero must change nothing: this ships to existing users";
+}
+
+TEST(GNSSTest, ContinuityCatchesSpikesChi2Misses) {
+  // 10 m is invisible to chi2 on this receiver and obvious here.
+  EXPECT_TRUE(continuity_rejects(10.0, 3.0));
+  EXPECT_TRUE(continuity_rejects(5.0,  3.0));
+}
+
+TEST(GNSSTest, ContinuityAcceptsOrdinaryFixToFixNoise) {
+  // The bar any new gate must clear. Across seven real logs the second difference
+  // of a good fix stayed under 2.2 m, so these must all survive a 3 m limit.
+  EXPECT_FALSE(continuity_rejects(0.2, 3.0));
+  EXPECT_FALSE(continuity_rejects(1.0, 3.0));
+  EXPECT_FALSE(continuity_rejects(2.0, 3.0));
+}
+
+TEST(GNSSTest, ContinuityIgnoresUnevenlySpacedFixes) {
+  // Across a gap the second difference is legitimately large, and rejecting the
+  // first fix after an outage is exactly the failure gnss_coast_min_gap_s exists
+  // to avoid. Two fixes a second apart then one eight seconds later: the robot
+  // has really travelled, and that must not read as a discontinuity.
+  FusionCoreConfig cfg;
+  cfg.outlier_rejection = true;
+  cfg.gnss.continuity_max_m = 3.0;
+  cfg.gnss_max_speed = 0.0;
+  FusionCore fc(cfg);
+  State s0;
+  fc.init(s0, 0.0);
+  auto feed = [&](double t, double ex) {
+    sensors::GnssFix f;
+    f.x = ex; f.y = 0.0; f.z = 0.0;
+    f.sigma_xy = f.sigma_z = 3.24;
+    f.hdop = f.vdop = 3.24;
+    f.fix_type = sensors::GnssFixType::RTK_FLOAT;
+    f.satellites = 12;
+    return fc.update_gnss(t, f);
+  };
+  feed(1.0, 0.4);
+  feed(2.0, 0.8);
+  EXPECT_TRUE(feed(10.0, 4.0))
+      << "a fix after an 8 s gap must not be rejected for breaking continuity";
+}

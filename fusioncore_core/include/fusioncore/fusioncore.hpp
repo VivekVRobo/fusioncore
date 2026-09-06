@@ -289,6 +289,7 @@ enum class GnssRejectionReason {
   IMPLAUSIBLE_JUMP = 8, // fix farther from prediction than max_speed*dt allows
   SIGMA_XY_HIGH   = 9,  // reported horizontal sigma in METRES > max_sigma_xy
   SIGMA_Z_HIGH    = 10, // reported vertical sigma in METRES > max_sigma_z
+  CONTINUITY_BREAK = 11, // fix disagrees with the two fixes before it
 };
 
 // Why GPS track heading did or did not fuse on a given fix.
@@ -534,6 +535,11 @@ private:
   double last_imu_time_     = -1.0;
   double last_encoder_time_ = -1.0;
   double last_gnss_time_    = -1.0;
+  // Fix-to-fix continuity: the last two ACCEPTED fixes, for the second difference.
+  // Only accepted fixes, so a rejected spike can never become the reference that
+  // makes the next good fix look like a break.
+  double cont_x1_ = 0.0, cont_y1_ = 0.0, cont_t1_ = -1.0;   // most recent
+  double cont_x2_ = 0.0, cont_y2_ = 0.0, cont_t2_ = -1.0;   // the one before
   double last_vslam_time_   = -1.0;
   double last_mag_time_     = -1.0;
   int    update_count_      = 0;
