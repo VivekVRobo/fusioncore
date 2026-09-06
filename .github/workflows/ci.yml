@@ -31,6 +31,13 @@ jobs:
         with:
           required-ros-distributions: ${{ matrix.ros_distro }}
 
+      # Before anything is built: ROS 2 silently ignores a parameter a node never
+      # declared, so a typo in a shipped config has no effect and no error, and
+      # the user drives believing the gate is tuned. Needs no ROS, so it runs
+      # first and fails fast.
+      - name: Check shipped configs against declared parameters
+        run: python3 tools/check_config_params.py --quiet
+
       - name: Install rosdep dependencies
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.sh
