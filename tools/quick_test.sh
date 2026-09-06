@@ -94,13 +94,20 @@ sleep 3
 info "Waiting for lifecycle node to reach active..."
 STATE=""
 for i in 1 2 3 4 5 6; do
-    STATE="$(timeout 20 ros2 lifecycle get /fusioncore 2>/dev/null | head -1 | awk '{print $1}')"
+    # The `|| true` is what makes the retry loop a retry loop. This script runs
+    # under `set -eo pipefail`, and a command substitution inherits the pipeline's
+    # exit status, so without it the FIRST failed lookup kills the whole script:
+    # no retry, and not even the diagnostic below. Locally the node is usually up
+    # by the first attempt so it looked fine; in CI, on a cold runner, it died
+    # 1.2 s in every time.
+    STATE="$(timeout 20 ros2 lifecycle get /fusioncore 2>/dev/null | head -1 | awk '{print $1}' || true)"
     [[ "${STATE}" == "active" ]] && break
     sleep 2
 done
 
 if [[ "${STATE}" != "active" ]]; then
-    if timeout 20 ros2 node list 2>/dev/null | grep -qx "/fusioncore"; then
+    NODES="$(timeout 20 ros2 node list 2>/dev/null || true)"
+    if echo "${NODES}" | grep -qx "/fusioncore"; then
         fail "/fusioncore is up but stalled in '${STATE:-unknown}' instead of active"
         echo "       A bad parameter is the usual cause. Rerun the launch to see the error:"
         echo "         ros2 launch fusioncore_ros fusioncore.launch.py \\"
