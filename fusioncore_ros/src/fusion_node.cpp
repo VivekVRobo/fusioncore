@@ -2194,6 +2194,24 @@ private:
   // never surfaced at the one moment a user would look.
   void announce_heading_validated(const fusioncore::FusionCoreStatus& st)
   {
+    // Same place, same once-only shape: the IMU and the encoders disagreeing about
+    // which way the robot is turning means one of them has a frame convention
+    // wrong, and it is worth interrupting for.
+    if (st.yaw_rate_sign_conflict && !yaw_sign_announced_) {
+      yaw_sign_announced_ = true;
+      RCLCPP_ERROR(get_logger(),
+        "IMU and encoder yaw rates DISAGREE IN SIGN on %.0f%% of the %d samples "
+        "where both said the robot was turning (imu mean %+.3f rad/s, encoder mean "
+        "%+.3f rad/s). One of them has a frame "
+        "convention wrong, and because imu.gyro_noise is tighter than "
+        "encoder.yaw_noise the filter is leaning on the gyro. Turning the robot "
+        "LEFT by hand must give a POSITIVE angular_velocity.z under REP-103. A "
+        "BNO085 in UART-RVC mode reports yaw increasing CLOCKWISE and needs its "
+        "sign flipped in the driver.",
+        100.0 * st.yaw_rate_disagree_frac, st.yaw_rate_turn_samples,
+        st.yaw_rate_imu_mean, st.yaw_rate_encoder_mean);
+    }
+
     if (!st.heading_validated || heading_announced_) return;
     heading_announced_ = true;
     const double sig = compute_heading_sigma_deg(fc_->get_state());
@@ -2637,6 +2655,7 @@ private:
 
   // Extracts heading 1-sigma in degrees from the filter covariance via quaternion Jacobian.
   bool heading_announced_ = false;
+  bool yaw_sign_announced_ = false;
 
   double compute_heading_sigma_deg(const fusioncore::State& s) const
   {

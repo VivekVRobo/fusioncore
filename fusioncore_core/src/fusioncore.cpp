@@ -507,6 +507,9 @@ void FusionCore::update_imu(
   if (reject_stale_from_skew(timestamp_seconds, last_imu_raw_stamp_, imu_stale_rejects_))
     return;
 
+  yaw_sign_imu_wz_    = wz;
+  yaw_sign_imu_stamp_ = timestamp_seconds;
+
   predict_to(timestamp_seconds);
 
   sensors::ImuMeasurement z;
@@ -683,6 +686,8 @@ void FusionCore::update_encoder(
 
   if (reject_stale_from_skew(timestamp_seconds, last_enc_raw_stamp_, enc_stale_rejects_))
     return;
+
+  note_yaw_rate_sign(timestamp_seconds, wz);
 
   predict_to(timestamp_seconds);
 
@@ -1265,6 +1270,48 @@ const State& FusionCore::get_state() const {
   return ukf_.state();
 }
 
+
+// Watch whether the IMU and the wheel encoders agree about which way the robot is
+// turning. See the members in fusioncore.hpp for why this exists.
+//
+// Counts votes rather than requiring a continuous stretch of disagreement. A
+// hand-driven rover corrects constantly, so its yaw rate crosses zero all the
+// time: measured on the 2026-09-06 log, the longest unbroken interval with both
+// sensors above even 0.05 rad/s was 0.9 s. A continuity rule would never fire on
+// real driving, which is exactly the case this needs to catch.
+//
+// 0.08 rad/s (4.6 deg/s) is clear of gyro noise and of the phantom yaw a straight
+// driving differential rover fabricates from wheel scale mismatch, while still
+// admitting 44 percent of that log's samples, so votes accumulate quickly. A
+// genuine direction change makes the two disagree briefly as one leads the other,
+// which is why a supermajority over many samples is required rather than a streak.
+void FusionCore::note_yaw_rate_sign(double stamp, double enc_wz)
+{
+  constexpr double TURNING_RAD_S  = 0.08;
+  constexpr int    MIN_VOTES      = 200;
+  constexpr double DISAGREE_RATIO = 0.80;
+  constexpr double IMU_FRESH_SECS = 0.5;
+
+  if (yaw_sign_conflict_) return;                       // latched, say it once
+  if (yaw_sign_imu_stamp_ < 0.0) return;
+  if (stamp - yaw_sign_imu_stamp_ > IMU_FRESH_SECS) return;
+
+  const double imu_wz = yaw_sign_imu_wz_;
+  // Both must agree the robot IS turning before their signs mean anything.
+  if (std::fabs(imu_wz) < TURNING_RAD_S || std::fabs(enc_wz) < TURNING_RAD_S) return;
+
+  ++yaw_sign_votes_;
+  if ((imu_wz > 0.0) != (enc_wz > 0.0)) {
+    ++yaw_sign_disagree_;
+    yaw_sign_imu_sum_ += imu_wz;
+    yaw_sign_enc_sum_ += enc_wz;
+  }
+
+  if (yaw_sign_votes_ >= MIN_VOTES &&
+      static_cast<double>(yaw_sign_disagree_) / yaw_sign_votes_ >= DISAGREE_RATIO)
+    yaw_sign_conflict_ = true;
+}
+
 FusionCoreStatus FusionCore::get_status() const {
   FusionCoreStatus status;
   status.initialized  = initialized_;
@@ -1294,6 +1341,15 @@ FusionCoreStatus FusionCore::get_status() const {
 
   // Heading observability
   status.heading_validated = heading_validated_;
+  status.yaw_rate_sign_conflict = yaw_sign_conflict_;
+  status.yaw_rate_turn_samples = yaw_sign_votes_;
+  if (yaw_sign_votes_ > 0)
+    status.yaw_rate_disagree_frac =
+      static_cast<double>(yaw_sign_disagree_) / yaw_sign_votes_;
+  if (yaw_sign_disagree_ > 0) {
+    status.yaw_rate_imu_mean     = yaw_sign_imu_sum_ / yaw_sign_disagree_;
+    status.yaw_rate_encoder_mean = yaw_sign_enc_sum_ / yaw_sign_disagree_;
+  }
   status.heading_source    = heading_source_;
   status.distance_traveled = distance_traveled_;
 

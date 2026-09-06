@@ -374,6 +374,15 @@ struct FusionCoreStatus {
   double       position_uncertainty = 0.0;
   int          update_count         = 0;
 
+  // True once the IMU and the wheel encoders have disagreed about the SIGN of the
+  // yaw rate, consistently, while the robot was genuinely turning. One of the two
+  // has a frame convention wrong. Latches: it describes the setup, not the moment.
+  bool          yaw_rate_sign_conflict = false;
+  double        yaw_rate_imu_mean      = 0.0;  // rad/s, over the samples that voted
+  double        yaw_rate_encoder_mean  = 0.0;  // rad/s, same samples
+  double        yaw_rate_disagree_frac = 0.0;  // of samples where BOTH were turning
+  int           yaw_rate_turn_samples  = 0;    // how many that was
+
   // Heading observability
   bool          heading_validated   = false;
   HeadingSource heading_source      = HeadingSource::NONE;
@@ -694,6 +703,28 @@ private:
     sensors::ImuNoiseMatrix R;
   };
   std::deque<ImuBufferEntry> imu_buffer_;
+
+  // ─── Yaw rate sign agreement ─────────────────────────────────────────────
+  // A rover ran for months with its gyro yaw rate inverted: the BNO085 in
+  // UART-RVC mode reports yaw increasing clockwise while REP-103 is
+  // counterclockwise positive. Both sensors were healthy, the encoders were
+  // right, and the filter watched them contradict each other every cycle
+  // without comment. The disagreement was noticed twice and blamed on the
+  // wheels both times. Because imu.gyro_noise defaults far tighter than
+  // encoder.yaw_noise, the filter leans on the gyro for heading, which is
+  // exactly the sensor that was wrong.
+  //
+  // Only samples taken while genuinely turning count, so noise around zero
+  // cannot vote, and the verdict needs to persist rather than fire on one
+  // sample.
+  double yaw_sign_imu_wz_        = 0.0;    // most recent IMU yaw rate
+  double yaw_sign_imu_stamp_     = -1.0;
+  double yaw_sign_imu_sum_       = 0.0;   // summed over disagreeing samples only
+  double yaw_sign_enc_sum_       = 0.0;
+  int    yaw_sign_votes_         = 0;     // samples where BOTH were turning
+  int    yaw_sign_disagree_      = 0;     // of those, how many disagreed in sign
+  bool   yaw_sign_conflict_      = false;
+  void note_yaw_rate_sign(double stamp, double enc_wz);
 
   // Heading observability tracking
   bool          heading_validated_ = false;
