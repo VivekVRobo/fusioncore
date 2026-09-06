@@ -192,6 +192,7 @@ public:
     // climbing with it on, on NCLT 2013-04-05.
     declare_parameter("gnss.max_speed_drift_k", 3.0);
     declare_parameter("gnss.max_sigma_xy",   25.0);
+    declare_parameter("gnss.outlier_sigma_xy", 0.0);
     declare_parameter("gnss.max_sigma_z",    50.0);
     declare_parameter("gnss.min_satellites", 4);
     // Minimum fix type for GNSS fusion: 1=GPS, 2=DGPS, 3=RTK_FLOAT, 4=RTK_FIXED
@@ -489,6 +490,7 @@ public:
     max_hdop_                  = config.gnss.max_hdop;
     max_vdop_                  = config.gnss.max_vdop;
     config.gnss.max_sigma_xy   = get_parameter("gnss.max_sigma_xy").as_double();
+    config.gnss.outlier_sigma_xy = get_parameter("gnss.outlier_sigma_xy").as_double();
     config.gnss.max_sigma_z    = get_parameter("gnss.max_sigma_z").as_double();
     max_sigma_xy_              = config.gnss.max_sigma_xy;
     max_sigma_z_               = config.gnss.max_sigma_z;

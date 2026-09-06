@@ -973,7 +973,21 @@ bool FusionCore::apply_gnss_update(
   if (config_.outlier_rejection) {
     sensors::GnssPosMeasurement innovation_pre;
     sensors::GnssPosNoiseMatrix S;
-    ukf_.predict_measurement<sensors::GNSS_POS_DIM>(z, h_gnss, R, innovation_pre, S);
+    // Gate on SHORT-TERM consistency when the user has measured it, not on the
+    // receiver's absolute accuracy. See GnssParams::outlier_sigma_xy for why the
+    // two differ by a factor of tens and what that costs. The update below still
+    // uses the full R: only the gate's view of the world changes here.
+    sensors::GnssPosNoiseMatrix R_gate = R;
+    if (config_.gnss.outlier_sigma_xy > 0.0) {
+      const double v = config_.gnss.outlier_sigma_xy * config_.gnss.outlier_sigma_xy;
+      R_gate.setZero();
+      R_gate(0, 0) = v;
+      R_gate(1, 1) = v;
+      // Vertical is left on the receiver's own figure: height error is genuinely
+      // worse than horizontal and is not what a multipath jump shows up in.
+      R_gate(2, 2) = R(2, 2);
+    }
+    ukf_.predict_measurement<sensors::GNSS_POS_DIM>(z, h_gnss, R_gate, innovation_pre, S);
 
     // Compute Mahalanobis distance squared inline so it can be surfaced for observability.
     // This avoids calling is_outlier() which would run a second LDLT internally.

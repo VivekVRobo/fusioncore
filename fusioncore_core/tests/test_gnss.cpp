@@ -619,3 +619,111 @@ TEST(GNSSTest, TrackHeadingReportsDisabled) {
   EXPECT_EQ(fc.get_gnss_debug().track_heading_state,
             TrackHeadingState::NOT_ATTEMPTED);
 }
+
+// ─── The outlier gate can be told what "short-term" means ────────────────────
+//
+// A receiver's reported covariance describes ABSOLUTE accuracy: multipath and
+// ionospheric error that moves slowly. Consecutive fixes are far more consistent
+// than that number implies. Measured on the 2026-09-06 rover log, 3.24 m declared
+// against a 0.171 m median second difference, a factor of 55.
+//
+// The update wants the absolute figure or the filter believes GPS to centimetres
+// it has not earned. The gate wants the short-term figure, because an outlier IS
+// a break in short-term consistency. With the absolute figure in both places, S
+// is so large that nothing looks surprising: on that log a spike had to exceed
+// 29 m before it was rejected, while an accepted 15 m spike moved position 4.5 m.
+namespace {
+// Feed a straight run of clean fixes, then one displaced by `spike` metres.
+// Returns true if that last fix was rejected.
+bool spike_rejected(double spike, double outlier_sigma_xy) {
+  FusionCoreConfig cfg;
+  cfg.outlier_rejection = true;
+  cfg.gnss.outlier_sigma_xy = outlier_sigma_xy;
+  cfg.gnss_max_speed = 0.0;              // isolate the chi2 gate
+  FusionCore fc(cfg);
+  State s0;
+  fc.init(s0, 0.0);
+  double t = 0.0, x = 0.0;
+  auto feed = [&](double ex) {
+    sensors::GnssFix f;
+    f.x = ex; f.y = 0.0; f.z = 0.0;
+    f.sigma_xy = f.sigma_z = 3.24;       // what this receiver declares
+    f.hdop = f.vdop = 3.24;
+    f.fix_type = sensors::GnssFixType::RTK_FLOAT;
+    f.satellites = 12;
+    return fc.update_gnss(t, f);
+  };
+  for (int i = 0; i < 40; ++i) {
+    t += 1.0;
+    fc.update_encoder(t, 0.4, 0.0, 0.0);
+    x += 0.4;
+    feed(x);
+  }
+  t += 1.0;
+  fc.update_encoder(t, 0.4, 0.0, 0.0);
+  x += 0.4;
+  return !feed(x + spike);
+}
+}  // namespace
+
+// Smallest spike (in whole metres) this configuration rejects, or -1.
+int spike_threshold(double outlier_sigma_xy) {
+  for (int d = 1; d <= 120; ++d)
+    if (spike_rejected(d, outlier_sigma_xy)) return d;
+  return -1;
+}
+
+TEST(GNSSTest, OutlierSigmaDefaultsToTheOldBehaviour) {
+  // Zero must change nothing: this ships to existing users.
+  EXPECT_FALSE(spike_rejected(2.0, 0.0)) << "ordinary noise must never be rejected";
+  EXPECT_TRUE (spike_rejected(60.0, 0.0)) << "a 60 m jump must still be caught";
+}
+
+TEST(GNSSTest, OutlierSigmaNeverLoosensTheGate) {
+  // The invariant that matters. Telling the gate the receiver is more consistent
+  // than its declared covariance can only make it more suspicious, never less.
+  //
+  // It is easy to get this backwards: a value ABOVE the receiver's own sigma
+  // inflates the gate's S and lets MORE through. Measured with a 3.24 m receiver,
+  // outlier_sigma_xy=5.0 moved the rejection threshold from 26 m out to 30 m,
+  // which is the opposite of the intent. Hence the guidance to measure it from a
+  // bag rather than guess.
+  const int base = spike_threshold(0.0);
+  ASSERT_GT(base, 0);
+  for (double os : {2.0, 1.0, 0.5}) {
+    EXPECT_LE(spike_threshold(os), base)
+        << "outlier_sigma_xy=" << os << " made the gate looser than the default";
+  }
+}
+
+TEST(GNSSTest, OutlierSigmaStillAcceptsOrdinaryNoise) {
+  // The failure mode that has bitten this project repeatedly is a gate that
+  // rejects good data. Ordinary fix-to-fix noise must survive at every setting.
+  for (double os : {0.0, 2.0, 1.0, 0.5}) {
+    EXPECT_FALSE(spike_rejected(0.5, os)) << "os=" << os;
+    EXPECT_FALSE(spike_rejected(1.0, os)) << "os=" << os;
+    EXPECT_FALSE(spike_rejected(2.0, os)) << "os=" << os;
+  }
+}
+
+TEST(GNSSTest, ChiSquaredGateCannotSeeMetreScaleSpikes) {
+  // Documents a limit rather than a fix, because it is the more important fact.
+  //
+  // A chi2 gate tests the fix against the FILTER, so its scale is set by
+  // S = H P H' + R. With a 3.24 m receiver and a filter carrying metres of
+  // position uncertainty, S is tens of square metres and nothing under about
+  // 20 m looks surprising. Measured on the 2026-09-06 rover log: rejection began
+  // between 29 and 30 m, and an accepted 15 m spike moved position 4.5 m.
+  //
+  // Giving the gate a better R helps but cannot cure it, because P remains. Nor
+  // does fixing heading: a perfect absolute heading halved position sigma from
+  // 7.19 to 3.94 m and moved the threshold the WRONG way, 26 m out to 32 m.
+  //
+  // Catching a metre-scale spike needs a test that does not involve P at all,
+  // comparing a fix against its neighbours rather than against the filter. See
+  // the fix-to-fix continuity proposal.
+  EXPECT_FALSE(spike_rejected(10.0, 0.0))
+      << "if this ever passes, the chi2 gate got sharper and the note above is stale";
+  EXPECT_FALSE(spike_rejected(10.0, 0.5))
+      << "a better gate R alone does not reach 10 m either";
+}

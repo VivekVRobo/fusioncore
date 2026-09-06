@@ -59,6 +59,29 @@ enum class GnssFixType {
 // ─── GNSS quality parameters ─────────────────────────────────────────────────
 
 struct GnssParams {
+  // Short-term consistency of the receiver, in METRES, used ONLY by the chi2
+  // outlier gate. Zero (the default) keeps the old behaviour of gating on the
+  // same R the update uses.
+  //
+  // Those are two different quantities and conflating them is why the gate does
+  // not fire. A receiver's reported covariance describes ABSOLUTE accuracy, the
+  // multipath and ionospheric error that moves slowly; consecutive fixes are far
+  // more consistent than that number implies. Measured on the 2026-09-06 rover
+  // log: 3.24 m declared, 0.171 m median second difference, a factor of 55.
+  //
+  // The update wants the absolute figure, or the filter will believe GPS to
+  // centimetres it has not earned and track that slow bias rigidly. The gate
+  // wants the short-term figure, because an outlier IS a break in short-term
+  // consistency. With the absolute figure in both places, S is so large that no
+  // realistic spike looks surprising: on that log a spike had to exceed 29 m
+  // before it was rejected, and an accepted 15 m spike moved position 4.5 m.
+  //
+  // Estimate it from a bag with tools/nis_from_bag.py, which reports the
+  // fix-to-fix second difference for exactly this purpose. Set it a little
+  // generously: too small and ordinary noise gets rejected, which is the failure
+  // mode that has bitten this project repeatedly.
+  double outlier_sigma_xy = 0.0;
+
   double base_noise_xy = 1.0;
   double base_noise_z  = 2.0;
   double heading_noise = 0.02;
