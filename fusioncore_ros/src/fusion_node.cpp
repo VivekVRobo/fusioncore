@@ -2164,6 +2164,7 @@ private:
     publish_gnss_status(rclcpp::Time(msg->header.stamp));
 
     auto fc_status = fc_->get_status();
+    announce_heading_validated(fc_status);
     if (!fc_status.heading_validated) {
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
         "Heading not yet validated: lever arm inactive. "
@@ -2174,6 +2175,50 @@ private:
         // old value was still in force, which reads exactly like a config that
         // failed to load. Cost a real debugging session on the rover.
         get_parameter("gnss.track_heading_min_dist").as_double());
+    }
+  }
+
+
+  // Announce heading validation ONCE, with the uncertainty that came with it.
+  //
+  // heading_validated flips on distance travelled alone, so it means "far enough
+  // that heading could be observable", not "heading is known". Measured on the
+  // rover 2026-09-05: the flag went true at 5.04 m carrying 48.6 deg of
+  // uncertainty, and on 2026-09-06 the whole run reported validated at a yaw
+  // 1-sigma of 101 deg. Nothing in the log said so either time, and anything
+  // reading the flag as "trustworthy" was being told something optimistic.
+  //
+  // The error is geometric: GPS track heading is the bearing between two fixes,
+  // so it is roughly (GNSS sigma / distance travelled). At a 6 m sigma, 5 m of
+  // travel is more than a radian. The number was always available; it was just
+  // never surfaced at the one moment a user would look.
+  void announce_heading_validated(const fusioncore::FusionCoreStatus& st)
+  {
+    if (!st.heading_validated || heading_announced_) return;
+    heading_announced_ = true;
+    const double sig = compute_heading_sigma_deg(fc_->get_state());
+    const double lever_max = get_parameter("gnss.lever_arm_max_heading_sigma_deg").as_double();
+    if (sig > lever_max) {
+      RCLCPP_WARN(get_logger(),
+        "Heading VALIDATED at %.1f m, but the uncertainty is %.1f deg, over the "
+        "%.1f deg the GNSS lever arm needs, so the antenna offset stays disabled. "
+        "'Validated' only means the robot has travelled far enough for heading to "
+        "be observable, not that it is known. Bearing error is roughly "
+        "(GNSS sigma / distance), so a noisy receiver needs a longer baseline: "
+        "raise gnss.track_heading_min_dist, or provide an absolute heading source.",
+        st.distance_traveled, sig, lever_max);
+    } else {
+      const char* src = "GPS_TRACK";
+      switch (st.heading_source) {
+        case fusioncore::HeadingSource::DUAL_ANTENNA:    src = "DUAL_ANTENNA"; break;
+        case fusioncore::HeadingSource::MAGNETOMETER:    src = "MAGNETOMETER"; break;
+        case fusioncore::HeadingSource::IMU_ORIENTATION: src = "IMU_ORIENTATION"; break;
+        case fusioncore::HeadingSource::GPS_TRACK:       src = "GPS_TRACK"; break;
+        case fusioncore::HeadingSource::NONE:            src = "NONE"; break;
+      }
+      RCLCPP_INFO(get_logger(),
+        "Heading validated at %.1f m with %.1f deg 1-sigma (source %s).",
+        st.distance_traveled, sig, src);
     }
   }
 
@@ -2352,6 +2397,7 @@ private:
     publish_gnss_status(rclcpp::Time(msg->header.stamp));
 
     auto fc_status = fc_->get_status();
+    announce_heading_validated(fc_status);
     if (!fc_status.heading_validated) {
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
         "Heading not yet validated: lever arm inactive. "
@@ -2590,6 +2636,8 @@ private:
   }
 
   // Extracts heading 1-sigma in degrees from the filter covariance via quaternion Jacobian.
+  bool heading_announced_ = false;
+
   double compute_heading_sigma_deg(const fusioncore::State& s) const
   {
     const double qw = s.x[fusioncore::QW];
