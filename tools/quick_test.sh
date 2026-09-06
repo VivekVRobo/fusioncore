@@ -142,9 +142,16 @@ echo ""
 echo "  Checks:"
 echo "  -------"
 
+# Uses the shell's timeout, NOT `ros2 topic echo --timeout`.
+#
+# That flag does not exist on Humble: ros2topic gained it after that release, so
+# on Humble argparse rejects the whole command and every check below reports FAIL
+# while the topics are in fact publishing perfectly. A false negative in the first
+# thing a new user runs is worse than no check at all, and it is invisible to
+# anyone testing only on Jazzy. `timeout N` is portable and does the same job.
 check_topic() {
     local topic="$1" label="$2"
-    if ros2 topic echo "${topic}" --once --timeout 5 >/dev/null 2>&1; then
+    if timeout 5 ros2 topic echo "${topic}" --once >/dev/null 2>&1; then
         pass "${label}"
     else
         fail "${label}  (topic: ${topic})"
@@ -155,7 +162,9 @@ check_topic /fusion/odom  "/fusion/odom publishing (main output)"
 check_topic /fusion/pose  "/fusion/pose publishing"
 check_topic /diagnostics  "/diagnostics publishing"
 
-if ros2 service call /fusioncore/reset std_srvs/srv/Trigger '{}' >/dev/null 2>&1; then
+# Bounded for the same reason: a service call with nothing on the other end waits
+# for the service to appear, which in CI means the job hangs instead of failing.
+if timeout 10 ros2 service call /fusioncore/reset std_srvs/srv/Trigger '{}' >/dev/null 2>&1; then
     pass "/fusioncore/reset service responds"
 else
     fail "/fusioncore/reset service not found"
