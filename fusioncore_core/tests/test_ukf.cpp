@@ -177,3 +177,53 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+// ─── Measurement mean of an angle must not break across the +-pi cut ─────────
+//
+// Found on the 2026-09-06 rover log. update()/predict_measurement() took a plain
+// weighted mean of the measurement sigma points. That is fine for metres and
+// wrong for radians: once the sigma points straddle +-pi, averaging values near
+// -pi with values near +pi lands nowhere near either, so the innovation and S are
+// both built from a mean that is not the mean. On real data with the magnetometer
+// enabled the filter reached a 213 km position error in 3 of 24 tuning
+// combinations, every one of them at the DEFAULT magnetometer.declination_rad of
+// 0.0 (issue #92); any non-zero declination shifted the trajectory off the cut and
+// hid it. The fix takes the mean about a reference sigma point, wrapping each
+// offset the short way round, which stays correct for any weights including the
+// large negative Wm[0] that ruled out an atan2 circular mean.
+//
+// The state here sits exactly on the cut with a merely uncertain quaternion
+// (1e-3, not the 1.0 that some older fixtures used, which throws sigma points off
+// the unit sphere entirely and makes any angle mean meaningless). Measured on this
+// exact setup: correct gives innovation 0.0500 and S 0.0042, the plain mean gives
+// 0.1866 and 0.0601.
+TEST(UKFTest, AngleMeasurementMeanSurvivesThePiBoundary) {
+  UKF ukf;
+  State initial;
+  initial.x = StateVector::Zero();
+  initial.x[QW] = std::cos(M_PI / 2.0);   // yaw = pi, right on the wrap
+  initial.x[QZ] = std::sin(M_PI / 2.0);
+  initial.P = StateMatrix::Identity() * 1e-4;
+  for (int q : {QW, QX, QY, QZ}) initial.P(q, q) = 1e-3;
+  ukf.init(initial);
+
+  auto h = [](const StateVector& s) {
+    Eigen::Matrix<double, 1, 1> z;
+    z[0] = std::atan2(2.0 * (s[QW] * s[QZ] + s[QX] * s[QY]),
+                      1.0 - 2.0 * (s[QY] * s[QY] + s[QZ] * s[QZ]));
+    return z;
+  };
+  // 0.05 rad the other side of the cut: the same heading, expressed as -pi+0.05.
+  Eigen::Matrix<double, 1, 1> z;
+  z[0] = std::atan2(std::sin(M_PI + 0.05), std::cos(M_PI + 0.05));
+  Eigen::Matrix<double, 1, 1> R;  R(0, 0) = 0.02 * 0.02;
+  Eigen::Matrix<double, 1, 1> innov, S;
+  ukf.predict_measurement<1>(z, h, R, innov, S, 0b1);
+
+  EXPECT_NEAR(innov[0], 0.05, 0.02)
+      << "innovation " << innov[0] << " rad, expected 0.05. A plain mean of the "
+         "measurement sigma points reports 0.187 here.";
+  EXPECT_LT(S(0, 0), 0.02)
+      << "S = " << S(0, 0) << ", expected about 0.004. A mean taken across the pi "
+         "cut inflates it by more than an order of magnitude.";
+}

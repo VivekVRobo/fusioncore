@@ -87,6 +87,14 @@ TEST(GNSSManagerTest, DualAntennaHeadingUpdate) {
   State initial;
   // State() default-constructs with QW=1 (identity) = yaw 0, facing east
   initial.P       = StateMatrix::Identity() * 1.0;
+  // Identity*1.0 puts 1.0 on the QUATERNION diagonal, which state.hpp specifies at
+  // about 1e-8. At that spread the sigma points are thrown far off the unit sphere
+  // and their yaws span well past +-pi, where a mean of angles has no single right
+  // answer and the update result is an artefact of how it is computed. Keep the
+  // large covariance everywhere it is meaningful and give the quaternion a value
+  // that is merely uncertain rather than nonsensical, so this test measures what it
+  // claims to: that a confident heading pulls yaw toward the measurement.
+  for (int q : {QW, QX, QY, QZ}) initial.P(q, q) = 1e-2;
   fc.init(initial, 0.0);
 
   // Dual antenna says: actually facing 45 degrees

@@ -215,10 +215,24 @@ Eigen::Matrix<double, z_dim, 1> UKF::update(
   // With yaw near 0: sum_cos ≈ -99 + 99*cos(spread) ≈ -0.05 (negative due to cos < 1),
   // so atan2(0, -0.05) = π instead of 0, making every z_diff ≈ π → S goes negative
   // → K*S*K.T has wrong sign → P goes non-PSD → Cholesky crash.
-  // Angle wrapping is handled correctly via normalize_angle on z_diff and innovation below.
   ZVector z_pred = ZVector::Zero();
   for (int i = 0; i < n_sigma; ++i)
     z_pred += Wm_[i] * sigma_z.col(i);
+
+  // Angle dimensions cannot use that linear mean: it is only valid while the
+  // sigma points stay on one side of the +-pi cut. Take the weighted mean about a
+  // reference sigma point instead, wrapping each offset to the short way round.
+  // Because the weights sum to 1, ref + sum(Wm[i] * wrap(z[i] - ref)) IS the
+  // weighted mean, and unlike a circular atan2 mean it stays correct when Wm[0]
+  // is large and negative, which is what ruled the atan2 form out above.
+  for (int d = 0; d < z_dim; ++d) {
+    if (!(angle_dims & (1u << d))) continue;
+    const double ref = sigma_z(d, 0);
+    double acc = 0.0;
+    for (int i = 0; i < n_sigma; ++i)
+      acc += Wm_[i] * normalize_angle(sigma_z(d, i) - ref);
+    z_pred[d] = normalize_angle(ref + acc);
+  }
 
   ZMatrix   S   = R;
   PxzMatrix Pxz = PxzMatrix::Zero();
@@ -268,11 +282,28 @@ void UKF::predict_measurement(
   for (int i = 0; i < n_sigma; ++i)
     sigma_z.col(i) = h(sigma.col(i));
 
-  // Same weighted mean as update(): no circular mean for same reason.
-  // Angle wrapping is handled via normalize_angle on z_diff and innovation_out below.
+  // Same weighted mean as update(), and the same reference-wrapped correction for
+  // angle dimensions. These two must agree: predict_measurement() is what the chi2
+  // outlier gate reads, so a mean computed differently here would gate on one
+  // number and fuse on another.
   ZVector z_pred = ZVector::Zero();
   for (int i = 0; i < n_sigma; ++i)
     z_pred += Wm_[i] * sigma_z.col(i);
+
+  // Angle dimensions cannot use that linear mean: it is only valid while the
+  // sigma points stay on one side of the +-pi cut. Take the weighted mean about a
+  // reference sigma point instead, wrapping each offset to the short way round.
+  // Because the weights sum to 1, ref + sum(Wm[i] * wrap(z[i] - ref)) IS the
+  // weighted mean, and unlike a circular atan2 mean it stays correct when Wm[0]
+  // is large and negative, which is what ruled the atan2 form out above.
+  for (int d = 0; d < z_dim; ++d) {
+    if (!(angle_dims & (1u << d))) continue;
+    const double ref = sigma_z(d, 0);
+    double acc = 0.0;
+    for (int i = 0; i < n_sigma; ++i)
+      acc += Wm_[i] * normalize_angle(sigma_z(d, i) - ref);
+    z_pred[d] = normalize_angle(ref + acc);
+  }
 
   ZMatrix S = R;
   for (int i = 0; i < n_sigma; ++i) {
