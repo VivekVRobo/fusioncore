@@ -677,6 +677,8 @@ public:
     }
 
     fc_ = std::make_unique<fusioncore::FusionCore>(config);
+    gnss_no_fix_tally_[0] = fusioncore::OutcomeTally{};
+    gnss_no_fix_tally_[1] = fusioncore::OutcomeTally{};
 
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -1971,7 +1973,10 @@ private:
     else                mark_sensor_received("GNSS2");
     if (!fc_->is_initialized()) return;
 
-    if (msg->status.status < 0) return;
+    if (msg->status.status < 0) {
+      note_gnss_no_fix(source_id, rclcpp::Time(msg->header.stamp).seconds());
+      return;
+    }
 
     double t = rclcpp::Time(msg->header.stamp).seconds();
 
@@ -2258,7 +2263,10 @@ private:
     else                mark_sensor_received("GNSS2");
     if (!fc_->is_initialized()) return;
 
-    if (msg->status.status < 0) return;
+    if (msg->status.status < 0) {
+      note_gnss_no_fix(source_id, rclcpp::Time(msg->header.stamp).seconds());
+      return;
+    }
 
     double t = rclcpp::Time(msg->header.stamp).seconds();
 
@@ -2576,6 +2584,21 @@ private:
   }
 
   // ─── Observability helpers ────────────────────────────────────────────────
+
+  // A fix the receiver marks NO_FIX is dropped here and never reaches the
+  // filter, so none of the core's counters can see it. Left unrecorded it is
+  // the most invisible failure there is: on filter_health a receiver that has
+  // lost fix looks exactly like one that is working, since the outlier count
+  // stays 0 and no rejection reason is ever set. Count it so the health topic,
+  // and any bag that recorded it, still says what happened to those fixes.
+  void note_gnss_no_fix(int source_id, double t)
+  {
+    const int i = (source_id == 0) ? 0 : 1;
+    fusioncore::OutcomeTally& tally = gnss_no_fix_tally_[i];
+    if (tally.count == 0) tally.first_seen = t;
+    tally.last_seen = t;
+    ++tally.count;
+  }
 
   // Converts a GnssRejectionReason enum to the string stored in the message.
   static std::string gnss_reason_str(fusioncore::GnssRejectionReason r)
@@ -2957,23 +2980,6 @@ private:
       return "Unknown";
     };
 
-    auto gnss_reject_str = [](fusioncore::GnssRejectionReason r) -> std::string {
-      switch (r) {
-        case fusioncore::GnssRejectionReason::NOT_PROCESSED:    return "";
-        case fusioncore::GnssRejectionReason::ACCEPTED:         return "";
-        case fusioncore::GnssRejectionReason::FIX_TYPE_LOW:     return "FIX_TYPE_LOW";
-        case fusioncore::GnssRejectionReason::HDOP_HIGH:        return "HDOP_HIGH";
-        case fusioncore::GnssRejectionReason::VDOP_HIGH:        return "VDOP_HIGH";
-        case fusioncore::GnssRejectionReason::MIN_SATS:         return "MIN_SATS";
-        case fusioncore::GnssRejectionReason::CHI2_FAILED:      return "CHI2_FAILED";
-        case fusioncore::GnssRejectionReason::DELAY_TOO_LARGE:  return "DELAY_TOO_LARGE";
-        case fusioncore::GnssRejectionReason::IMPLAUSIBLE_JUMP: return "IMPLAUSIBLE_JUMP";
-        case fusioncore::GnssRejectionReason::SIGMA_XY_HIGH:    return "SIGMA_XY_HIGH";
-        case fusioncore::GnssRejectionReason::SIGMA_Z_HIGH:     return "SIGMA_Z_HIGH";
-      }
-      return "";
-    };
-
     uint8_t filter_level = diagnostic_msgs::msg::DiagnosticStatus::OK;
     std::string filter_msg = "Running";
     if (!status.heading_validated) {
@@ -3015,12 +3021,45 @@ private:
 
       fh.gnss_in_coast           = status.gnss_in_coast;
       fh.gnss_consecutive_rejects = status.gnss_consecutive_rejects;
-      fh.gnss_last_reject_reason = gnss_reject_str(status.gnss_last_rejection_reason);
+      // gnss_reason_str is the single table for these names. A local copy of it
+      // here had gone stale and published an empty string for the three newest
+      // reasons, which is worse than a wrong name because it reads as "no
+      // rejection has happened".
+      fh.gnss_last_reject_reason = gnss_reason_str(status.gnss_last_rejection_reason);
+      if (status.gnss_last_rejection_reason == fusioncore::GnssRejectionReason::NOT_PROCESSED ||
+          status.gnss_last_rejection_reason == fusioncore::GnssRejectionReason::ACCEPTED) {
+        fh.gnss_last_reject_reason.clear();
+      }
       fh.mag_last_reject_reason = mag_reason_str(status.mag_last_rejection_reason);
       if (status.mag_last_rejection_reason == fusioncore::MagRejectionReason::NOT_PROCESSED ||
           status.mag_last_rejection_reason == fusioncore::MagRejectionReason::ACCEPTED) {
         fh.mag_last_reject_reason.clear();
       }
+
+      fh.outcome_names.clear();
+      fh.outcome_counts.clear();
+      fh.outcome_first_seen.clear();
+      fh.outcome_last_seen.clear();
+      auto append_tally = [&fh](const std::string& prefix, const std::string& name,
+                                const fusioncore::OutcomeTally& t) {
+        if (t.count == 0) return;
+        fh.outcome_names.push_back(prefix + name);
+        fh.outcome_counts.push_back(t.count);
+        fh.outcome_first_seen.push_back(t.first_seen);
+        fh.outcome_last_seen.push_back(t.last_seen);
+      };
+      const auto& gnss_tally = fc_->gnss_outcome_tally();
+      for (int i = 0; i < fusioncore::GNSS_REJECTION_REASON_COUNT; ++i) {
+        append_tally("gnss:", gnss_reason_str(
+          static_cast<fusioncore::GnssRejectionReason>(i)), gnss_tally[i]);
+      }
+      const auto& mag_tally = fc_->mag_outcome_tally();
+      for (int i = 0; i < fusioncore::MAG_REJECTION_REASON_COUNT; ++i) {
+        append_tally("mag:", mag_reason_str(
+          static_cast<fusioncore::MagRejectionReason>(i)), mag_tally[i]);
+      }
+      append_tally("gnss:",  "NO_FIX_REPORTED", gnss_no_fix_tally_[0]);
+      append_tally("gnss2:", "NO_FIX_REPORTED", gnss_no_fix_tally_[1]);
 
       fh.distance_traveled_m = status.distance_traveled;
 
@@ -3179,6 +3218,9 @@ private:
   // ─── Members ──────────────────────────────────────────────────────────────
 
   std::unique_ptr<fusioncore::FusionCore>        fc_;
+  // Indexed by source_id: [0] primary receiver, [1] secondary. Cleared when the
+  // core is rebuilt in on_configure, so it covers the same run the core does.
+  fusioncore::OutcomeTally                      gnss_no_fix_tally_[2];
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   std::shared_ptr<tf2_ros::Buffer>               tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener>    tf_listener_;

@@ -192,14 +192,18 @@ heading_validated: true         # CAREFUL: this means "the robot has driven far
 heading_source: GPS_TRACK       # NONE | GPS_TRACK | IMU_ORIENTATION | DUAL_ANTENNA
                                 # | MAGNETOMETER
 
-# Why the last magnetometer reading was not used, if it was not. Cleared to
-# ACCEPTED when one is fused, the same convention as rejection_reason above.
-#   NOT_PROCESSED    no magnetometer configured, or none has arrived
-#   ACCEPTED         fused
-#   CHI2_FAILED      disagreed with the filter by more than mag.chi2_threshold
-#   FIELD_MAGNITUDE  corrected field magnitude outside magnetometer.field_strength
-#                    +- field_tolerance, so something magnetic is nearby
-mag_last_reject_reason: ACCEPTED
+# Why the most recent REJECTED measurement was rejected. Both fields are empty
+# until something is rejected, and both are sticky: once set they name the last
+# rejection and a later accepted measurement does not clear them. They answer
+# "what dropped it", not "is it happening now". For how often and when, read the
+# outcome arrays at the bottom of this message.
+#   CHI2_FAILED      disagreed with the filter by more than the chi2 threshold
+#   FIELD_MAGNITUDE  (mag) corrected field magnitude outside
+#                    magnetometer.field_strength +- field_tolerance, so
+#                    something magnetic is nearby
+# The GNSS field takes the same values as rejection_reason above.
+gnss_last_reject_reason: CHI2_FAILED
+mag_last_reject_reason: FIELD_MAGNITUDE
 
 # GPS coast mode: entered when GPS goes quiet or consecutively rejects
 gnss_in_coast: false
@@ -213,6 +217,24 @@ distance_traveled_m: 47.3
 gnss_outlier_count: 3
 imu_outlier_count: 0
 encoder_outlier_count: 0
+
+# Every gate outcome since init, as four parallel arrays. A name is present only
+# once it has happened, so an absent name means that gate has never fired. This
+# is what the single "last reason" fields above cannot tell you: how often, and
+# when. ACCEPTED is counted too, which is the part that makes an empty result
+# readable: if gnss:ACCEPTED is missing as well, no fix ever reached the filter,
+# which is a different problem from a gate rejecting them.
+#
+# gnss:NO_FIX_REPORTED counts fixes the receiver itself marked NO_FIX. Those are
+# dropped before the filter sees them, so they appear in no other counter, and a
+# receiver that has lost fix otherwise looks identical to one that is working.
+#
+# Timestamps are measurement stamps in the filter's own clock, so a reason can be
+# located in a recorded bag without replaying it.
+outcome_names:      [gnss:ACCEPTED, gnss:CHI2_FAILED, mag:FIELD_MAGNITUDE]
+outcome_counts:     [1420, 37, 8]
+outcome_first_seen: [1788816069.3, 1788816194.1, 1788816070.5]
+outcome_last_seen:  [1788816351.7, 1788816221.9, 1788816072.0]
 ```
 
 **What healthy looks like in a plot:**
@@ -221,6 +243,7 @@ encoder_outlier_count: 0
 - `gnss_innovation_norm` stays roughly constant when GPS is stable, spikes on multipath, then drops back
 - `heading_sigma_deg` is the number to read, NOT `heading_validated`. The flag goes true on distance travelled alone, once the robot has covered `gnss.heading_observable_distance`, without checking that any heading was ever measured. It means "far enough that heading could be observable", not "heading is known". A rover run on 2026-09-06 reported `heading_validated: true` for its entire duration at a yaw 1-sigma of 101 degrees. Watch this number instead, and note that the GNSS lever arm switches itself off above `gnss.lever_arm_max_heading_sigma_deg` (20 by default)
 - `gnss_in_coast` goes true during tunnels or urban canyons, false when GPS resumes
+- the `outcome_*` arrays are the first thing to read on a bag you did not watch live. A gate that never appears never fired, which is worth knowing before you spend a day assuming it did
 
 **How to view these in Foxglove:**
 

@@ -234,6 +234,15 @@ ros2 topic echo /fusion/debug/filter_health --field gnss_last_reject_reason
 
 Do not rely on `gnss_outlier_count` alone to tell you GPS is being rejected: that counter only counts chi2 and physical-plausibility rejects. Quality-gate rejects (`HDOP_HIGH`, `VDOP_HIGH`, `FIX_TYPE_LOW`, `MIN_SATS`) and `DELAY_TOO_LARGE` leave it at zero, so a filter dropping every fix on vertical DOP shows `gnss_outlier_count: 0` while `gnss_last_reject_reason: VDOP_HIGH`.
 
+**Then: how often, and when.** `gnss_last_reject_reason` names one fix. The same message carries four parallel arrays, `outcome_names`, `outcome_counts`, `outcome_first_seen` and `outcome_last_seen`, holding every outcome that has occurred since init with the stamps of its first and last occurrence:
+
+```bash
+ros2 topic echo /fusion/debug/filter_health --field outcome_names
+ros2 topic echo /fusion/debug/filter_health --field outcome_counts
+```
+
+Read them together. A rate is what tells you whether a gate is doing its job or fighting your receiver: `gnss:CHI2_FAILED` at 2% of `gnss:ACCEPTED` is a gate catching spikes, and at 40% it is a gate that needs looking at. A name that is absent never happened, which is the cheap way to rule a gate out instead of assuming it fired. `gnss:ACCEPTED` is counted for the same reason: if it is missing too, nothing reached the filter at all and the gates are not the problem. `gnss:NO_FIX_REPORTED` counts fixes the receiver marked NO_FIX, which are dropped before the filter sees them and show up in no other counter. The timestamps are in the filter's clock, so you can jump straight to the right window of a bag rather than replaying the whole run.
+
 **For the full per-fix detail**, look at the structured debug firehose (one message per fix, accepted or not):
 
 ```bash

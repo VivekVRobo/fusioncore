@@ -151,6 +151,8 @@ void FusionCore::init(const State& initial_state, double timestamp_seconds) {
   gnss_debug_                    = GnssFixDebug{};
   mag_debug_                     = MagnetometerDebug{};
   last_gnss_rejection_reason_    = GnssRejectionReason::NOT_PROCESSED;
+  gnss_tally_.fill(OutcomeTally{});
+  mag_tally_.fill(OutcomeTally{});
   last_mag_rejection_reason_     = MagRejectionReason::NOT_PROCESSED;
   last_gnss_innovation_norm_     = 0.0;
   last_imu_innovation_norm_      = 0.0;
@@ -200,6 +202,8 @@ void FusionCore::reset() {
   gnss_debug_                   = GnssFixDebug{};
   mag_debug_                    = MagnetometerDebug{};
   last_gnss_rejection_reason_   = GnssRejectionReason::NOT_PROCESSED;
+  gnss_tally_.fill(OutcomeTally{});
+  mag_tally_.fill(OutcomeTally{});
   last_mag_rejection_reason_    = MagRejectionReason::NOT_PROCESSED;
   last_gnss_innovation_norm_    = 0.0;
   last_imu_innovation_norm_     = 0.0;
@@ -826,6 +830,38 @@ void FusionCore::update_zupt(double timestamp_seconds, double noise_sigma) {
   ukf_.update<sensors::ENCODER_DIM>(z, sensors::zupt_measurement_function, R);
 }
 
+
+// Record the outcome currently in gnss_debug_ and stamp it. See OutcomeTally in
+// fusioncore.hpp for why a single "last reason" field was not enough.
+void FusionCore::note_gnss_outcome(double timestamp_seconds)
+{
+  // last_gnss_rejection_reason_ is documented as sticky: it names the most
+  // recent REJECTED fix and survives later accepted ones, so a user who finds
+  // GPS quiet can still see what dropped it. An accepted fix must not wipe it.
+  // The tally below counts ACCEPTED anyway, which is how "the gate never fired"
+  // stays distinguishable from "no fix ever arrived".
+  if (gnss_debug_.reason != GnssRejectionReason::ACCEPTED)
+    last_gnss_rejection_reason_ = gnss_debug_.reason;
+  const int i = static_cast<int>(gnss_debug_.reason);
+  if (i < 0 || i >= GNSS_REJECTION_REASON_COUNT) return;
+  OutcomeTally& t = gnss_tally_[i];
+  if (t.count == 0) t.first_seen = timestamp_seconds;
+  t.last_seen = timestamp_seconds;
+  ++t.count;
+}
+
+void FusionCore::note_mag_outcome(double timestamp_seconds)
+{
+  if (mag_debug_.reason != MagRejectionReason::ACCEPTED)
+    last_mag_rejection_reason_ = mag_debug_.reason;
+  const int i = static_cast<int>(mag_debug_.reason);
+  if (i < 0 || i >= MAG_REJECTION_REASON_COUNT) return;
+  OutcomeTally& t = mag_tally_[i];
+  if (t.count == 0) t.first_seen = timestamp_seconds;
+  t.last_seen = timestamp_seconds;
+  ++t.count;
+}
+
 bool FusionCore::update_gnss(
   double timestamp_seconds,
   const sensors::GnssFix& fix
@@ -865,7 +901,7 @@ bool FusionCore::update_gnss(
       gnss_debug_.reason = GnssRejectionReason::VDOP_HIGH;
     else
       gnss_debug_.reason = GnssRejectionReason::MIN_SATS;
-    last_gnss_rejection_reason_ = gnss_debug_.reason;
+    note_gnss_outcome(timestamp_seconds);
     return false;
   }
 
@@ -883,13 +919,13 @@ bool FusionCore::update_gnss(
       gnss_fused = apply_gnss_update(timestamp_seconds, fix);
     });
     if (!applied) {
+      // apply_delayed_measurement only returns false before running the update,
+      // so this is the one rejection apply_gnss_update never got to record.
       gnss_debug_.accepted = false;
       gnss_debug_.reason   = GnssRejectionReason::DELAY_TOO_LARGE;
+      note_gnss_outcome(timestamp_seconds);
     }
-    if (!applied || !gnss_fused) {
-      last_gnss_rejection_reason_ = gnss_debug_.reason;
-      return false;
-    }
+    if (!applied || !gnss_fused) return false;
     update_distance_traveled(fix.x, fix.y, pre_update_speed_delayed);
     last_gnss_time_ = timestamp_seconds;
     ++update_count_;
@@ -900,10 +936,7 @@ bool FusionCore::update_gnss(
   double pre_update_speed = std::sqrt(
     ukf_.state().x[VX] * ukf_.state().x[VX] +
     ukf_.state().x[VY] * ukf_.state().x[VY]);
-  if (!apply_gnss_update(timestamp_seconds, fix)) {
-    last_gnss_rejection_reason_ = gnss_debug_.reason;
-    return false;
-  }
+  if (!apply_gnss_update(timestamp_seconds, fix)) return false;
   update_distance_traveled(fix.x, fix.y, pre_update_speed);
   last_gnss_time_ = timestamp_seconds;
   ++update_count_;
@@ -990,7 +1023,7 @@ bool FusionCore::apply_gnss_update(
       if (resid > config_.gnss.continuity_max_m) {
         gnss_debug_.accepted = false;
         gnss_debug_.reason   = GnssRejectionReason::CONTINUITY_BREAK;
-        last_gnss_rejection_reason_ = gnss_debug_.reason;
+        note_gnss_outcome(timestamp_seconds);
         ++gnss_outliers_;
         ++gnss_consecutive_rejects_;
         return false;
@@ -1068,7 +1101,7 @@ bool FusionCore::apply_gnss_update(
         // initial value, so a user watching gnss_last_reject_reason sees a fix
         // vanish for no stated reason. On the 2026-08-03 field run this hid 158
         // rejections behind a meaningless label while the outlier counter rose.
-        last_gnss_rejection_reason_ = gnss_debug_.reason;
+        note_gnss_outcome(timestamp_seconds);
         return false;  // do not touch the coast counters: an outlier must not relax the gate
       }
     }
@@ -1077,7 +1110,7 @@ bool FusionCore::apply_gnss_update(
       ++gnss_outliers_;
       gnss_debug_.accepted = false;
       gnss_debug_.reason   = GnssRejectionReason::CHI2_FAILED;
-      last_gnss_rejection_reason_ = gnss_debug_.reason;
+      note_gnss_outcome(timestamp_seconds);
 
       if (config_.gnss_coast_n > 0) {
         // At the start of a rejection sequence, decide whether GPS was
@@ -1133,6 +1166,7 @@ bool FusionCore::apply_gnss_update(
   // Update observability state for accepted fix
   gnss_debug_.accepted           = true;
   gnss_debug_.reason             = GnssRejectionReason::ACCEPTED;
+  note_gnss_outcome(timestamp_seconds);
   gnss_debug_.in_coast_mode      = false;
   gnss_debug_.consecutive_rejects = 0;
   last_gnss_innovation_norm_     = innovation.norm();
@@ -1556,7 +1590,7 @@ bool FusionCore::update_magnetometer(
   if (sensors::mag_field_disturbed(mx, my, mz, config_.mag)) {
     ++mag_outliers_;
     mag_debug_.reason = MagRejectionReason::FIELD_MAGNITUDE;
-    last_mag_rejection_reason_ = mag_debug_.reason;
+    note_mag_outcome(timestamp_seconds);
     return false;
   }
 
@@ -1589,7 +1623,7 @@ bool FusionCore::update_magnetometer(
     if (mahalanobis_sq > config_.mag.chi2_threshold) {
       ++mag_outliers_;
       mag_debug_.reason = MagRejectionReason::CHI2_FAILED;
-      last_mag_rejection_reason_ = mag_debug_.reason;
+      note_mag_outcome(timestamp_seconds);
       return false;
     }
   }
@@ -1611,6 +1645,7 @@ bool FusionCore::update_magnetometer(
   ++update_count_;
   mag_debug_.accepted = true;
   mag_debug_.reason = MagRejectionReason::ACCEPTED;
+  note_mag_outcome(timestamp_seconds);
   return true;
 }
 
