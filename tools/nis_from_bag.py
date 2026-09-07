@@ -24,10 +24,13 @@ For a filter whose covariance is honest, NIS averages the measurement dimension,
 
 Usage:
     python3 tools/nis_from_bag.py <bag_dir> [more bags ...]
+    python3 tools/nis_from_bag.py --json <bag_dir> [more bags ...]
 """
-import sys
+import argparse
+import json
 import os
 import statistics
+import sys
 import yaml
 
 try:
@@ -41,15 +44,11 @@ except ImportError:
 GNSS_TOPIC = "/fusion/debug/gnss_status"
 NAVSAT_TYPE = "sensor_msgs/msg/NavSatFix"
 HEALTH_TOPIC = "/fusion/debug/filter_health"
-EXPECTED_NIS = 3.0          # GNSS position is a 3-DOF measurement
+EXPECTED_NIS = 3.0
 
 
 def storage_id(bag):
-    """rosbag2 needs to be told mcap vs sqlite3, and the metadata knows.
-
-    A recorder that was killed rather than interrupted leaves metadata.yaml
-    missing or empty, so fall back on the file extension instead of dying.
-    """
+    """rosbag2 needs to be told mcap vs sqlite3, and the metadata knows."""
     meta = os.path.join(bag, "metadata.yaml")
     try:
         with open(meta) as fh:
@@ -66,14 +65,6 @@ def storage_id(bag):
 
 
 def read_navsat(bag):
-    """Declared covariance vs how much consecutive fixes actually move.
-
-    A receiver that smooths internally reports its ABSOLUTE accuracy (metres,
-    dominated by multipath and ionosphere) while delivering fixes that agree with
-    each other to centimetres. The filter is handed the declared number as R, but
-    its innovations only ever see the short-term consistency, so NIS collapses.
-    Worth measuring, because it is invisible from the estimate alone.
-    """
     import math
     reader = rosbag2_py.SequentialReader()
     reader.open(rosbag2_py.StorageOptions(uri=bag, storage_id=storage_id(bag)),
@@ -100,13 +91,10 @@ def read_navsat(bag):
     earth = 6371000.0
     xs = [math.radians(v - lon[0]) * earth * math.cos(math.radians(lat[0])) for v in lon]
     ys = [math.radians(v - lat[0]) * earth for v in lat]
-    # Second difference cancels constant velocity. What survives is measurement
-    # noise plus the robot's real acceleration, so this BOUNDS the noise above.
     d2 = sorted(math.hypot(xs[i+1] - 2*xs[i] + xs[i-1], ys[i+1] - 2*ys[i] + ys[i-1])
                 for i in range(1, len(xs) - 1))
     declared = statistics.median(sig)
     observed = d2[len(d2) // 2]
-    # White noise of size s gives median |2nd difference| of about sqrt(6)*1.1774*s
     expected = math.sqrt(6.0) * 1.1774 * declared
     return topic, declared, observed, expected
 
@@ -135,41 +123,105 @@ def pct(values, q):
     return values[idx]
 
 
-def report(bag):
+def collect_metrics(bag):
     name = os.path.basename(os.path.normpath(bag))
+    result = {"bag": name, "path": bag, "gnss_topic": GNSS_TOPIC, "status": "ok"}
     try:
         gnss, health = read(bag)
-    except Exception as exc:                      # one unreadable bag must not
-        print("  %s: could not be read (%s)" % (name, exc))   # stop the rest
-        return
-    if gnss is None:
-        print("  %s: no %s recorded, nothing to measure" % (name, GNSS_TOPIC))
-        return
-    if not gnss:
-        print("  %s: %s is empty" % (name, GNSS_TOPIC))
-        return
+    except Exception as exc:
+        result.update({"status": "read_error", "error": str(exc)})
+        return result
 
-    # mahalanobis_sq is -1 when a quality gate failed before the chi2 test ran,
-    # so those fixes carry no NIS to report.
+    if gnss is None:
+        result.update({"status": "missing_gnss_topic", "fix_count": 0})
+        return result
+    if not gnss:
+        result.update({"status": "empty_gnss_topic", "fix_count": 0})
+        return result
+
     nis = sorted(m.mahalanobis_sq for m in gnss if m.mahalanobis_sq >= 0.0)
     reasons = {}
     for m in gnss:
         reasons[m.rejection_reason] = reasons.get(m.rejection_reason, 0) + 1
-    threshold = gnss[-1].chi2_threshold
+
+    fix_count = len(gnss)
+    accepted_count = sum(1 for m in gnss if m.accepted)
+    result.update({
+        "fix_count": fix_count,
+        "accepted_count": accepted_count,
+        "rejected_count": fix_count - accepted_count,
+        "rejection_reasons": dict(sorted(reasons.items())),
+        "chi2_threshold": gnss[-1].chi2_threshold,
+        "expected_nis": EXPECTED_NIS,
+        "nis_sample_count": len(nis),
+    })
+
+    if nis:
+        result["nis"] = {
+            "median": statistics.median(nis),
+            "mean": statistics.mean(nis),
+            "p90": pct(nis, 0.90),
+            "max": nis[-1],
+        }
+    else:
+        result["nis"] = None
+
+    if health:
+        hdg = sorted(m.heading_sigma_deg for m in health)
+        pos = sorted(m.position_sigma_x for m in health)
+        result["filter"] = {
+            "position_sigma_median_m": statistics.median(pos),
+            "heading_sigma_median_deg": statistics.median(hdg),
+            "heading_sources": sorted({m.heading_source for m in health}),
+        }
+    else:
+        result["filter"] = None
+
+    nav = read_navsat(bag)
+    if nav:
+        topic, declared, observed, expected = nav
+        result["navsat_covariance"] = {
+            "topic": topic,
+            "declared_sigma_median_m": declared,
+            "observed_second_difference_median_m": observed,
+            "expected_second_difference_m": expected,
+            "smoothing_ratio": expected / max(observed, 1e-9),
+        }
+    else:
+        result["navsat_covariance"] = None
+
+    return result
+
+
+def report_text(result):
+    name = result["bag"]
+    status = result["status"]
+    if status == "read_error":
+        print("  %s: could not be read (%s)" % (name, result["error"]))
+        return
+    if status == "missing_gnss_topic":
+        print("  %s: no %s recorded, nothing to measure" % (name, GNSS_TOPIC))
+        return
+    if status == "empty_gnss_topic":
+        print("  %s: %s is empty" % (name, GNSS_TOPIC))
+        return
 
     print("\n=== %s ===" % name)
-    print("  fixes %d, accepted %d" % (len(gnss), sum(1 for m in gnss if m.accepted)))
-    for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
-        print("    %-18s %4d  (%.0f%%)" % (reason, count, 100.0 * count / len(gnss)))
+    print("  fixes %d, accepted %d" % (result["fix_count"], result["accepted_count"]))
+    for reason, count in sorted(result["rejection_reasons"].items(), key=lambda kv: -kv[1]):
+        print("    %-18s %4d  (%.0f%%)" %
+              (reason, count, 100.0 * count / result["fix_count"]))
 
-    if not nis:
+    nis = result["nis"]
+    if nis is None:
         print("  no NIS samples: every fix failed a quality gate before the chi2 test")
         return
 
-    med = statistics.median(nis)
+    med = nis["median"]
     print("  NIS median %.2f   mean %.2f   p90 %.2f   max %.2f   (honest is %.1f)"
-          % (med, statistics.mean(nis), pct(nis, 0.90), nis[-1], EXPECTED_NIS))
+          % (med, nis["mean"], nis["p90"], nis["max"], EXPECTED_NIS))
 
+    threshold = result["chi2_threshold"]
     if med > 3.0 * EXPECTED_NIS:
         print("  OVERCONFIDENT by %.0fx: the filter trusts itself more than it has "
               "earned, so its gain is too low to correct its own error."
@@ -179,47 +231,61 @@ def report(bag):
               "warrant." % (EXPECTED_NIS / med))
         print("  Consequence: the gain is too high, so the filter tracks GNSS noise "
               "instead of smoothing it.")
-        if nis[-1] < threshold:
+        if nis["max"] < threshold:
             print("  Consequence: outlier rejection is INERT. The chi2 threshold is "
                   "%.2f and the largest NIS in this whole run was %.2f, so no fix "
-                  "could ever have been rejected by it." % (threshold, nis[-1]))
+                  "could ever have been rejected by it." % (threshold, nis["max"]))
     else:
         print("  Covariance is consistent with the errors being made.")
 
+    health = result["filter"]
     if health:
-        hdg = sorted(m.heading_sigma_deg for m in health)
-        pos = sorted(m.position_sigma_x for m in health)
-        print("  filter position 1-sigma: median %.2f m" % statistics.median(pos))
+        print("  filter position 1-sigma: median %.2f m" % health["position_sigma_median_m"])
         print("  heading 1-sigma: median %.0f deg, sources %s"
-              % (statistics.median(hdg), sorted({m.heading_source for m in health})))
-        if statistics.median(hdg) > 45.0:
+              % (health["heading_sigma_median_deg"], health["heading_sources"]))
+        if health["heading_sigma_median_deg"] > 45.0:
             print("  Heading is effectively unknown, which inflates the position "
                   "covariance and pushes NIS down.")
 
-    nav = read_navsat(bag)
+    nav = result["navsat_covariance"]
     if nav:
-        topic, declared, observed, expected = nav
-        print("  receiver on %s declares %.2f m 1-sigma" % (topic, declared))
+        print("  receiver on %s declares %.2f m 1-sigma"
+              % (nav["topic"], nav["declared_sigma_median_m"]))
         print("    fix-to-fix scatter implies far less: median second difference "
               "%.3f m against the %.1f m that declared figure would produce"
-              % (observed, expected))
-        if observed * 10.0 < expected:
+              % (nav["observed_second_difference_median_m"],
+                 nav["expected_second_difference_m"]))
+        if nav["observed_second_difference_median_m"] * 10.0 < nav["expected_second_difference_m"]:
             print("    Consecutive fixes are %.0fx smoother than the declared "
                   "covariance implies, so that number describes ABSOLUTE accuracy "
                   "(multipath, ionosphere) while the filter's innovations only see "
-                  "short-term consistency." % (expected / max(observed, 1e-9)))
+                  "short-term consistency." % nav["smoothing_ratio"])
             print("    This alone drives NIS down and is not a filter bug. Do not "
                   "just shrink the covariance: the absolute error really is metres, "
                   "and a small R would make the filter track that bias rigidly and "
                   "report centimetre confidence it has not earned.")
 
 
-def main():
-    if len(sys.argv) < 2:
-        sys.exit(__doc__)
-    for bag in sys.argv[1:]:
-        report(bag)
-    print()
+def parse_args(argv):
+    parser = argparse.ArgumentParser(
+        description="Report FusionCore GNSS NIS/filter consistency from rosbag2 recordings.")
+    parser.add_argument(
+        "--json", action="store_true",
+        help="emit one JSON object per bag (JSON Lines) instead of prose")
+    parser.add_argument("bags", nargs="+", metavar="bag_dir")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    for bag in args.bags:
+        result = collect_metrics(bag)
+        if args.json:
+            print(json.dumps(result, sort_keys=True))
+        else:
+            report_text(result)
+    if not args.json:
+        print()
 
 
 if __name__ == "__main__":
