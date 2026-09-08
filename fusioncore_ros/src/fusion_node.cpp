@@ -192,6 +192,8 @@ public:
     // re-acquires: measured 4.4 m recovery with the gate off versus 358 m and
     // climbing with it on, on NCLT 2013-04-05.
     declare_parameter("gnss.max_speed_drift_k", 3.0);
+    declare_parameter("gnss.min_sigma_xy",   0.02);
+    declare_parameter("gnss.min_sigma_z",    0.05);
     declare_parameter("gnss.max_sigma_xy",   25.0);
     declare_parameter("gnss.outlier_sigma_xy", 0.0);
     declare_parameter("gnss.continuity_max_m", 0.0);
@@ -213,9 +215,9 @@ public:
     // set this instead of writing a launch remap (a remap still works and applies
     // to whatever name is set here).
     declare_parameter("gnss.fix_topic", std::string("/gnss/fix"));
-    // Override the primary GNSS message frame. When empty, use the first
-    // message frame_id, falling back to "gnss_link" only if it is empty.
-    // This mirrors imu.frame_id and prevents false startup TF warnings.
+    // Override the primary GNSS message frame. When empty, use the incoming
+    // message frame_id. If both are empty, the frame is unknown and TF
+    // validation / lever-arm auto-resolution are skipped.
     declare_parameter("gnss.frame_id", std::string(""));
 
     // Optional second GNSS receiver topic: set to empty string to disable
@@ -433,6 +435,7 @@ public:
     heading_topic_ = get_parameter("gnss.heading_topic").as_string();
     gnss_fix_topic_ = get_parameter("gnss.fix_topic").as_string();
     gnss_frame_override_ = get_parameter("gnss.frame_id").as_string();
+    gnss_frame_validated_ = false;
     gnss2_topic_    = get_parameter("gnss.fix2_topic").as_string();
     azimuth_topic_  = get_parameter("gnss.azimuth_topic").as_string();
     use_gps_fix_    = get_parameter("gnss.use_gps_fix").as_bool();
@@ -496,6 +499,8 @@ public:
     config.gnss.max_vdop       = get_parameter("gnss.max_vdop").as_double();
     max_hdop_                  = config.gnss.max_hdop;
     max_vdop_                  = config.gnss.max_vdop;
+    gnss_min_sigma_xy_         = get_parameter("gnss.min_sigma_xy").as_double();
+    gnss_min_sigma_z_          = get_parameter("gnss.min_sigma_z").as_double();
     config.gnss.max_sigma_xy   = get_parameter("gnss.max_sigma_xy").as_double();
     config.gnss.outlier_sigma_xy = get_parameter("gnss.outlier_sigma_xy").as_double();
     config.gnss.continuity_max_m = get_parameter("gnss.continuity_max_m").as_double();
@@ -683,6 +688,8 @@ public:
     }
 
     fc_ = std::make_unique<fusioncore::FusionCore>(config);
+    gnss_no_fix_tally_[0] = fusioncore::OutcomeTally{};
+    gnss_no_fix_tally_[1] = fusioncore::OutcomeTally{};
 
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -1138,28 +1145,6 @@ private:
   // Prints [OK] or [MISSING] + exact fix command for each.
   // Returns true only if all critical transforms are found.
 
-    bool validate_primary_gnss_frame(const std::string & frame)
-    {
-      if (frame == base_frame_) {
-        RCLCPP_INFO(get_logger(), "  [OK]      GNSS frame is base frame: %s", frame.c_str());
-        gnss_frame_validated_ = true;
-        return true;
-      }
-
-      const bool ok = check_transform(frame, base_frame_);
-      if (ok) {
-        RCLCPP_INFO(get_logger(), "  [OK]      %s -> %s", frame.c_str(), base_frame_.c_str());
-      } else {
-        RCLCPP_WARN(get_logger(),
-          "  [MISSING] %s -> %s  Fix: ros2 run tf2_ros static_transform_publisher --x %.3f --y %.3f --z %.3f --frame-id %s --child-frame-id %s",
-          frame.c_str(), base_frame_.c_str(),
-          gnss_lever_arm_.x, gnss_lever_arm_.y, gnss_lever_arm_.z,
-          base_frame_.c_str(), frame.c_str());
-      }
-      gnss_frame_validated_ = true;
-      return ok;
-    }
-
     bool validate_transforms()
   {
     bool all_ok = true;
@@ -1186,18 +1171,16 @@ private:
       }
     }
 
-    // Check the primary GNSS frame only when it is known at startup.
-    // With no override the actual frame comes from the first GNSS message, so
-    // defer validation instead of assuming "gnss_link".
-    if (!gnss_lever_arm_.is_zero()) {
-      if (!gnss_frame_override_.empty()) {
-        if (!validate_primary_gnss_frame(gnss_frame_override_)) {
-          all_ok = false;
-        }
-      } else {
-        RCLCPP_INFO(get_logger(),
-          "  [DEFERRED] GNSS TF validation until first fix (gnss.frame_id is empty)");
+    // Validate the primary GNSS frame at startup only when it is genuinely known.
+    // With no override, the real frame arrives on the first GNSS message; do not
+    // invent gnss_link here because that can make startup diagnostics misleading.
+    if (!gnss_lever_arm_.is_zero() && !gnss_frame_override_.empty()) {
+      if (!validate_primary_gnss_frame(gnss_frame_override_)) {
+        all_ok = false;
       }
+    } else if (!gnss_lever_arm_.is_zero()) {
+      RCLCPP_INFO(get_logger(),
+        "  [DEFERRED] GNSS TF validation until first fix (gnss.frame_id is empty)");
     }
 
     // Check GNSS2 frame if secondary lever arm is configured
@@ -1216,6 +1199,33 @@ private:
 
     RCLCPP_INFO(get_logger(), "---------------------");
     return all_ok;
+  }
+
+  bool validate_primary_gnss_frame(const std::string & frame)
+  {
+    if (frame.empty()) {
+      return true;
+    }
+
+    if (frame == base_frame_) {
+      RCLCPP_INFO(get_logger(), "  [OK]      GNSS frame is base frame: %s", frame.c_str());
+      gnss_frame_validated_ = true;
+      return true;
+    }
+
+    const bool ok = check_transform(frame, base_frame_);
+    if (ok) {
+      RCLCPP_INFO(get_logger(), "  [OK]      %s -> %s", frame.c_str(), base_frame_.c_str());
+    } else {
+      RCLCPP_WARN(get_logger(),
+        "  [MISSING] %s -> %s  Fix: ros2 run tf2_ros static_transform_publisher "
+        "--x %.3f --y %.3f --z %.3f --frame-id %s --child-frame-id %s",
+        frame.c_str(), base_frame_.c_str(),
+        gnss_lever_arm_.x, gnss_lever_arm_.y, gnss_lever_arm_.z,
+        base_frame_.c_str(), frame.c_str());
+    }
+    gnss_frame_validated_ = true;
+    return ok;
   }
 
 
@@ -1999,23 +2009,33 @@ private:
     else                mark_sensor_received("GNSS2");
     if (!fc_->is_initialized()) return;
 
-    if (msg->status.status < 0) return;
+    if (msg->status.status < 0) {
+      note_gnss_no_fix(source_id, rclcpp::Time(msg->header.stamp).seconds());
+      return;
+    }
 
     double t = rclcpp::Time(msg->header.stamp).seconds();
 
+    const bool gnss_frame_unknown =
+      gnss_frame_override_.empty() && msg->header.frame_id.empty();
     const std::string gnss_frame = fusioncore_ros::resolve_gnss_frame(
       gnss_frame_override_, msg->header.frame_id);
-    if (source_id == 0 && !gnss_frame_validated_ && !gnss_lever_arm_.is_zero()) {
+
+    if (source_id == 0 && !gnss_frame_unknown &&
+        !gnss_frame_validated_ && !gnss_lever_arm_.is_zero()) {
       (void)validate_primary_gnss_frame(gnss_frame);
     }
 
     // One-shot auto-resolve of the GNSS lever arm from TF, primary receiver
-    // only. Uses the configured frame override, then msg->header.frame_id,
-    // and falls back to "gnss_link" if neither is available.
-    // looked up against base_frame_. Only runs when the user did not set
-    // gnss.lever_arm_x/y/z explicitly.
+    // only. Empty override + empty message frame means the frame is unknown:
+    // complete the one-shot as a no-op instead of probing a synthetic frame on
+    // every fix and blocking this callback for the TF timeout each time.
     if (source_id == 0 && !gnss_lever_arm_explicit_ && !gnss_lever_arm_tf_resolved_) {
-      if (gnss_frame != base_frame_) {
+      const auto tf_action = fusioncore_ros::gnss_lever_arm_tf_action(
+        gnss_frame_override_, msg->header.frame_id, base_frame_);
+      if (tf_action == fusioncore_ros::GnssLeverArmTfAction::MarkResolved) {
+        gnss_lever_arm_tf_resolved_ = true;
+      } else {
         try {
           auto tf = tf_buffer_->lookupTransform(
             base_frame_, gnss_frame, tf2::TimePointZero,
@@ -2039,9 +2059,6 @@ private:
             "Leaving lever arm at zero; set gnss.lever_arm_x/y/z explicitly to override.",
             base_frame_.c_str(), gnss_frame.c_str(), ex.what());
         }
-      } else {
-        // Resolved frame is the base frame: nothing to resolve, mark done.
-        gnss_lever_arm_tf_resolved_ = true;
       }
     }
 
@@ -2118,8 +2135,15 @@ private:
     // wheel/IMU drift >~1 cm between fixes then fails the chi² outlier gate
     // (16.27 at 3 DoF). Floor σxy = 2 cm, σz = 5 cm so small integration
     // drift stays inside the gate while still benefitting from RTK precision.
-    constexpr double kMinVarXY = 4e-4;    // σ = 0.02 m
-    constexpr double kMinVarZ  = 2.5e-3;  // σ = 0.05 m
+    // Floor is configurable because 2 cm only suits a receiver that is honest
+    // about being that good. A u-blox M9N in SBAS mode on 2026-09-07 reported
+    // sigma_xy 0.076 m while sitting still and scattering 1.03 m over 75 s, over
+    // confident by 13.6x. R is built from this number and the chi2 gate judges
+    // every fix against that same R, so an over-confident receiver both drags
+    // position and can turn the gate hyperactive. Set gnss.min_sigma_xy to the
+    // scatter you have actually measured standing still.
+    const double kMinVarXY = gnss_min_sigma_xy_ * gnss_min_sigma_xy_;
+    const double kMinVarZ  = gnss_min_sigma_z_  * gnss_min_sigma_z_;
     if (msg->position_covariance_type == 3) {
       // Full 3x3 covariance available: use it directly including off-diagonals
       Eigen::Matrix3d cov;
@@ -2293,15 +2317,21 @@ private:
     else                mark_sensor_received("GNSS2");
     if (!fc_->is_initialized()) return;
 
-    const std::string gnss_frame = fusioncore_ros::resolve_gnss_frame(
-      gnss_frame_override_, msg->header.frame_id);
-    if (source_id == 0 && !gnss_frame_validated_ && !gnss_lever_arm_.is_zero()) {
-      (void)validate_primary_gnss_frame(gnss_frame);
+    if (msg->status.status < 0) {
+      note_gnss_no_fix(source_id, rclcpp::Time(msg->header.stamp).seconds());
+      return;
     }
 
-    if (msg->status.status < 0) return;
-
     double t = rclcpp::Time(msg->header.stamp).seconds();
+
+    const bool gnss_frame_unknown =
+      gnss_frame_override_.empty() && msg->header.frame_id.empty();
+    const std::string gnss_frame = fusioncore_ros::resolve_gnss_frame(
+      gnss_frame_override_, msg->header.frame_id);
+    if (source_id == 0 && !gnss_frame_unknown &&
+        !gnss_frame_validated_ && !gnss_lever_arm_.is_zero()) {
+      (void)validate_primary_gnss_frame(gnss_frame);
+    }
 
     fusioncore::sensors::LLAPoint lla;
     lla.lat_rad = msg->latitude  * M_PI / 180.0;
@@ -2375,8 +2405,8 @@ private:
     //   4. Receiver hdop/vdop: actual DOP values, scale with base_noise in the core
     //   5. Defaults
 
-    constexpr double kMinVarXY = 4e-4;   // sigma = 0.02 m
-    constexpr double kMinVarZ  = 2.5e-3; // sigma = 0.05 m
+    const double kMinVarXY = gnss_min_sigma_xy_ * gnss_min_sigma_xy_;
+    const double kMinVarZ  = gnss_min_sigma_z_  * gnss_min_sigma_z_;
 
     if (msg->position_covariance_type == gps_msgs::msg::GPSFix::COVARIANCE_TYPE_KNOWN) {
       Eigen::Matrix3d cov;
@@ -2617,6 +2647,21 @@ private:
   }
 
   // ─── Observability helpers ────────────────────────────────────────────────
+
+  // A fix the receiver marks NO_FIX is dropped here and never reaches the
+  // filter, so none of the core's counters can see it. Left unrecorded it is
+  // the most invisible failure there is: on filter_health a receiver that has
+  // lost fix looks exactly like one that is working, since the outlier count
+  // stays 0 and no rejection reason is ever set. Count it so the health topic,
+  // and any bag that recorded it, still says what happened to those fixes.
+  void note_gnss_no_fix(int source_id, double t)
+  {
+    const int i = (source_id == 0) ? 0 : 1;
+    fusioncore::OutcomeTally& tally = gnss_no_fix_tally_[i];
+    if (tally.count == 0) tally.first_seen = t;
+    tally.last_seen = t;
+    ++tally.count;
+  }
 
   // Converts a GnssRejectionReason enum to the string stored in the message.
   static std::string gnss_reason_str(fusioncore::GnssRejectionReason r)
@@ -2998,23 +3043,6 @@ private:
       return "Unknown";
     };
 
-    auto gnss_reject_str = [](fusioncore::GnssRejectionReason r) -> std::string {
-      switch (r) {
-        case fusioncore::GnssRejectionReason::NOT_PROCESSED:    return "";
-        case fusioncore::GnssRejectionReason::ACCEPTED:         return "";
-        case fusioncore::GnssRejectionReason::FIX_TYPE_LOW:     return "FIX_TYPE_LOW";
-        case fusioncore::GnssRejectionReason::HDOP_HIGH:        return "HDOP_HIGH";
-        case fusioncore::GnssRejectionReason::VDOP_HIGH:        return "VDOP_HIGH";
-        case fusioncore::GnssRejectionReason::MIN_SATS:         return "MIN_SATS";
-        case fusioncore::GnssRejectionReason::CHI2_FAILED:      return "CHI2_FAILED";
-        case fusioncore::GnssRejectionReason::DELAY_TOO_LARGE:  return "DELAY_TOO_LARGE";
-        case fusioncore::GnssRejectionReason::IMPLAUSIBLE_JUMP: return "IMPLAUSIBLE_JUMP";
-        case fusioncore::GnssRejectionReason::SIGMA_XY_HIGH:    return "SIGMA_XY_HIGH";
-        case fusioncore::GnssRejectionReason::SIGMA_Z_HIGH:     return "SIGMA_Z_HIGH";
-      }
-      return "";
-    };
-
     uint8_t filter_level = diagnostic_msgs::msg::DiagnosticStatus::OK;
     std::string filter_msg = "Running";
     if (!status.heading_validated) {
@@ -3056,12 +3084,45 @@ private:
 
       fh.gnss_in_coast           = status.gnss_in_coast;
       fh.gnss_consecutive_rejects = status.gnss_consecutive_rejects;
-      fh.gnss_last_reject_reason = gnss_reject_str(status.gnss_last_rejection_reason);
+      // gnss_reason_str is the single table for these names. A local copy of it
+      // here had gone stale and published an empty string for the three newest
+      // reasons, which is worse than a wrong name because it reads as "no
+      // rejection has happened".
+      fh.gnss_last_reject_reason = gnss_reason_str(status.gnss_last_rejection_reason);
+      if (status.gnss_last_rejection_reason == fusioncore::GnssRejectionReason::NOT_PROCESSED ||
+          status.gnss_last_rejection_reason == fusioncore::GnssRejectionReason::ACCEPTED) {
+        fh.gnss_last_reject_reason.clear();
+      }
       fh.mag_last_reject_reason = mag_reason_str(status.mag_last_rejection_reason);
       if (status.mag_last_rejection_reason == fusioncore::MagRejectionReason::NOT_PROCESSED ||
           status.mag_last_rejection_reason == fusioncore::MagRejectionReason::ACCEPTED) {
         fh.mag_last_reject_reason.clear();
       }
+
+      fh.outcome_names.clear();
+      fh.outcome_counts.clear();
+      fh.outcome_first_seen.clear();
+      fh.outcome_last_seen.clear();
+      auto append_tally = [&fh](const std::string& prefix, const std::string& name,
+                                const fusioncore::OutcomeTally& t) {
+        if (t.count == 0) return;
+        fh.outcome_names.push_back(prefix + name);
+        fh.outcome_counts.push_back(t.count);
+        fh.outcome_first_seen.push_back(t.first_seen);
+        fh.outcome_last_seen.push_back(t.last_seen);
+      };
+      const auto& gnss_tally = fc_->gnss_outcome_tally();
+      for (int i = 0; i < fusioncore::GNSS_REJECTION_REASON_COUNT; ++i) {
+        append_tally("gnss:", gnss_reason_str(
+          static_cast<fusioncore::GnssRejectionReason>(i)), gnss_tally[i]);
+      }
+      const auto& mag_tally = fc_->mag_outcome_tally();
+      for (int i = 0; i < fusioncore::MAG_REJECTION_REASON_COUNT; ++i) {
+        append_tally("mag:", mag_reason_str(
+          static_cast<fusioncore::MagRejectionReason>(i)), mag_tally[i]);
+      }
+      append_tally("gnss:",  "NO_FIX_REPORTED", gnss_no_fix_tally_[0]);
+      append_tally("gnss2:", "NO_FIX_REPORTED", gnss_no_fix_tally_[1]);
 
       fh.distance_traveled_m = status.distance_traveled;
 
@@ -3219,7 +3280,12 @@ private:
 
   // ─── Members ──────────────────────────────────────────────────────────────
 
+  double gnss_min_sigma_xy_ = 0.02;   // metres: floor on the receiver's reported sigma
+  double gnss_min_sigma_z_  = 0.05;
   std::unique_ptr<fusioncore::FusionCore>        fc_;
+  // Indexed by source_id: [0] primary receiver, [1] secondary. Cleared when the
+  // core is rebuilt in on_configure, so it covers the same run the core does.
+  fusioncore::OutcomeTally                      gnss_no_fix_tally_[2];
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   std::shared_ptr<tf2_ros::Buffer>               tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener>    tf_listener_;
@@ -3328,7 +3394,7 @@ private:
   bool gnss_lever_arm_explicit_   = false;
   bool imu_lever_arm_tf_resolved_  = false;
   bool gnss_lever_arm_tf_resolved_ = false;
-  bool gnss_frame_validated_ = false;
+  bool gnss_frame_validated_        = false;
 
   // ZUPT parameters
   bool   zupt_enabled_            = true;

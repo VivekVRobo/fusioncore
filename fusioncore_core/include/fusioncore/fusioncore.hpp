@@ -267,6 +267,24 @@ struct FusionCoreConfig {
   double gnss_p_inflate_sigma = 50.0;
 };
 
+// How often each outcome happened, and when it first and last did.
+//
+// A single "last reason" field is a snapshot and answers almost nothing. It
+// cannot say whether a gate ever fired, how many times, or when it started,
+// because every fix overwrites it. That gap is what made a whole run look
+// healthy on 2026-09-06: every fix reported ACCEPTED while the chi2 gate sat 39x
+// below its threshold and could not have rejected anything. Establishing that
+// took a day of replaying bags and injecting synthetic spikes; a per-reason count
+// would have said "CHI2_FAILED: 0 of 222" straight out of the recording.
+//
+// Timestamps are the filter clock, in seconds, and are -1.0 until the outcome
+// has happened at least once.
+struct OutcomeTally {
+  int    count      = 0;
+  double first_seen = -1.0;
+  double last_seen  = -1.0;
+};
+
 // How heading was validated: tracked per filter run
 enum class HeadingSource {
   NONE            = 0,  // no independent heading: lever arm disabled
@@ -314,6 +332,12 @@ enum class TrackHeadingState {
   CHI2_FAILED      = 6,  // bearing computed but rejected as an outlier
 };
 
+// Sizes for the tally arrays, which are indexed by static_cast<int>(reason).
+// The static_asserts below hold these to the enums, so adding a reason without
+// bumping the count fails the build instead of silently going uncounted.
+constexpr int GNSS_REJECTION_REASON_COUNT = 12;
+constexpr int MAG_REJECTION_REASON_COUNT  = 4;
+
 // Why a magnetometer reading was rejected (or ACCEPTED if it passed).
 enum class MagRejectionReason {
   NOT_PROCESSED    = 0,
@@ -321,6 +345,13 @@ enum class MagRejectionReason {
   CHI2_FAILED      = 2,  // Mahalanobis distance > threshold
   FIELD_MAGNITUDE  = 3,  // corrected field magnitude outside configured range
 };
+
+static_assert(static_cast<int>(GnssRejectionReason::CONTINUITY_BREAK) + 1 ==
+              GNSS_REJECTION_REASON_COUNT,
+              "GNSS_REJECTION_REASON_COUNT must match GnssRejectionReason");
+static_assert(static_cast<int>(MagRejectionReason::FIELD_MAGNITUDE) + 1 ==
+              MAG_REJECTION_REASON_COUNT,
+              "MAG_REJECTION_REASON_COUNT must match MagRejectionReason");
 
 // Per-fix observability data: populated by update_gnss() on every call.
 // Retrieve via get_gnss_debug() after update_gnss() returns.
@@ -519,6 +550,14 @@ public:
   // See UKF::last_position_correction().
   double last_position_correction() const { return ukf_.last_position_correction(); }
   FusionCoreStatus   get_status()     const;
+
+  // Per-outcome tallies, indexed by static_cast<int>(the reason enum).
+  // Counts every fix, accepted included, so "the gate never fired" and
+  // "no fix ever arrived" are distinguishable. Reset by init() and reset().
+  const std::array<OutcomeTally, GNSS_REJECTION_REASON_COUNT>&
+    gnss_outcome_tally() const { return gnss_tally_; }
+  const std::array<OutcomeTally, MAG_REJECTION_REASON_COUNT>&
+    mag_outcome_tally() const { return mag_tally_; }
   const GnssFixDebug& get_gnss_debug() const { return gnss_debug_; }
   const MagnetometerDebug& get_magnetometer_debug() const { return mag_debug_; }
   void               reset();
@@ -639,6 +678,12 @@ private:
   GnssRejectionReason last_gnss_rejection_reason_ = GnssRejectionReason::NOT_PROCESSED;
   // Persists the reason of the last rejected magnetometer reading.
   MagRejectionReason last_mag_rejection_reason_ = MagRejectionReason::NOT_PROCESSED;
+  std::array<OutcomeTally, GNSS_REJECTION_REASON_COUNT> gnss_tally_{};
+  std::array<OutcomeTally, MAG_REJECTION_REASON_COUNT>  mag_tally_{};
+  // Record the outcome sitting in gnss_debug_/mag_debug_ and stamp it. Called at
+  // every terminal point so accepted and rejected fixes are both counted.
+  void note_gnss_outcome(double timestamp_seconds);
+  void note_mag_outcome(double timestamp_seconds);
 
   // Inter-sensor clock-skew protection. Raw per-stream stamps (recorded whether
   // or not the measurement was accepted, unlike last_*_time_ which only tracks

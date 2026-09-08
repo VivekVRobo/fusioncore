@@ -54,3 +54,20 @@ int32 mag_outlier_count
 # These are not outliers: the data may be perfect, the timestamps disagree.
 int32 imu_stale_reject_count
 int32 encoder_stale_reject_count
+
+# Every gate outcome that has occurred since init, as four parallel arrays.
+# A name appears only once it has happened at least once, so an absent name
+# means that gate has never fired. ACCEPTED is included, which is what makes
+# "the gate never fired" distinguishable from "no fix ever arrived": if
+# gnss:ACCEPTED is missing too, nothing was fed to the filter at all.
+# Names are prefixed gnss:, gnss2: or mag: and match the *_last_reject_reason
+# strings, plus gnss:NO_FIX_REPORTED for fixes the receiver marked NO_FIX. Those
+# are dropped before the filter sees them, so they appear in no other counter.
+# Timestamps are the measurement stamps of the first and last occurrence, in
+# the same clock the filter is driven with, so a reason can be located in a bag
+# without replaying it. Establishing that the chi2 gate had never fired on the
+# 2026-09-06 run took a day of replaying because only a "last reason" existed.
+string[]  outcome_names
+int32[]   outcome_counts
+float64[] outcome_first_seen
+float64[] outcome_last_seen

@@ -101,6 +101,20 @@ fusioncore:
     # Quality gate. Which pair applies depends on what your receiver publishes,
     # and getting this wrong is silent: rejected fixes leave the filter dead
     # reckoning with nothing but a throttled log line to say so.
+    gnss.min_sigma_xy: 0.02     # m. FLOOR on the receiver's reported sigma before
+                                # it becomes R. Raise it when your receiver is
+                                # over-confident: a u-blox M9N in SBAS mode was
+                                # measured declaring 0.076 m while scattering
+                                # 1.03 m standing still, 13.6x optimistic. R is
+                                # built from this and the chi2 gate is judged
+                                # against the same R, so believing it drags
+                                # position and can make the gate reject good
+                                # fixes. Measure your own scatter parked, and
+                                # floor it there. A floor in metres is correct
+                                # where a multiplier is not: it fixes the
+                                # over-confident mode and leaves an honest one
+                                # untouched.
+    gnss.min_sigma_z: 0.05      # m. Same, vertical.
     gnss.max_sigma_xy: 25.0     # m of reported 1-sigma. THIS is the gate that runs
     gnss.max_sigma_z: 50.0      # for sensor_msgs/NavSatFix, which carries no DOP.
                                 # A standalone receiver reports 2-8 m horizontal and
