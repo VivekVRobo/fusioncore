@@ -191,6 +191,8 @@ public:
     // re-acquires: measured 4.4 m recovery with the gate off versus 358 m and
     // climbing with it on, on NCLT 2013-04-05.
     declare_parameter("gnss.max_speed_drift_k", 3.0);
+    declare_parameter("gnss.min_sigma_xy",   0.02);
+    declare_parameter("gnss.min_sigma_z",    0.05);
     declare_parameter("gnss.max_sigma_xy",   25.0);
     declare_parameter("gnss.outlier_sigma_xy", 0.0);
     declare_parameter("gnss.continuity_max_m", 0.0);
@@ -490,6 +492,8 @@ public:
     config.gnss.max_vdop       = get_parameter("gnss.max_vdop").as_double();
     max_hdop_                  = config.gnss.max_hdop;
     max_vdop_                  = config.gnss.max_vdop;
+    gnss_min_sigma_xy_         = get_parameter("gnss.min_sigma_xy").as_double();
+    gnss_min_sigma_z_          = get_parameter("gnss.min_sigma_z").as_double();
     config.gnss.max_sigma_xy   = get_parameter("gnss.max_sigma_xy").as_double();
     config.gnss.outlier_sigma_xy = get_parameter("gnss.outlier_sigma_xy").as_double();
     config.gnss.continuity_max_m = get_parameter("gnss.continuity_max_m").as_double();
@@ -2088,8 +2092,15 @@ private:
     // wheel/IMU drift >~1 cm between fixes then fails the chi² outlier gate
     // (16.27 at 3 DoF). Floor σxy = 2 cm, σz = 5 cm so small integration
     // drift stays inside the gate while still benefitting from RTK precision.
-    constexpr double kMinVarXY = 4e-4;    // σ = 0.02 m
-    constexpr double kMinVarZ  = 2.5e-3;  // σ = 0.05 m
+    // Floor is configurable because 2 cm only suits a receiver that is honest
+    // about being that good. A u-blox M9N in SBAS mode on 2026-09-07 reported
+    // sigma_xy 0.076 m while sitting still and scattering 1.03 m over 75 s, over
+    // confident by 13.6x. R is built from this number and the chi2 gate judges
+    // every fix against that same R, so an over-confident receiver both drags
+    // position and can turn the gate hyperactive. Set gnss.min_sigma_xy to the
+    // scatter you have actually measured standing still.
+    const double kMinVarXY = gnss_min_sigma_xy_ * gnss_min_sigma_xy_;
+    const double kMinVarZ  = gnss_min_sigma_z_  * gnss_min_sigma_z_;
     if (msg->position_covariance_type == 3) {
       // Full 3x3 covariance available: use it directly including off-diagonals
       Eigen::Matrix3d cov;
@@ -2342,8 +2353,8 @@ private:
     //   4. Receiver hdop/vdop: actual DOP values, scale with base_noise in the core
     //   5. Defaults
 
-    constexpr double kMinVarXY = 4e-4;   // sigma = 0.02 m
-    constexpr double kMinVarZ  = 2.5e-3; // sigma = 0.05 m
+    const double kMinVarXY = gnss_min_sigma_xy_ * gnss_min_sigma_xy_;
+    const double kMinVarZ  = gnss_min_sigma_z_  * gnss_min_sigma_z_;
 
     if (msg->position_covariance_type == gps_msgs::msg::GPSFix::COVARIANCE_TYPE_KNOWN) {
       Eigen::Matrix3d cov;
@@ -3217,6 +3228,8 @@ private:
 
   // ─── Members ──────────────────────────────────────────────────────────────
 
+  double gnss_min_sigma_xy_ = 0.02;   // metres: floor on the receiver's reported sigma
+  double gnss_min_sigma_z_  = 0.05;
   std::unique_ptr<fusioncore::FusionCore>        fc_;
   // Indexed by source_id: [0] primary receiver, [1] secondary. Cleared when the
   // core is rebuilt in on_configure, so it covers the same run the core does.
