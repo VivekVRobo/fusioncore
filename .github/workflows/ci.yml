@@ -31,12 +31,12 @@ jobs:
         with:
           required-ros-distributions: ${{ matrix.ros_distro }}
 
-      # Before anything is built: ROS 2 silently ignores a parameter a node never
-      # declared, so a typo in a shipped config has no effect and no error, and
-      # the user drives believing the gate is tuned. Needs no ROS, so it runs
-      # first and fails fast.
-      - name: Check shipped configs against declared parameters
-        run: python3 tools/check_config_params.py --quiet
+      # Run the dependency-free checks before installing ROS packages or building.
+      # A malformed benchmark payload must never be interpreted as a passing gate.
+      - name: Run pre-build configuration and Python tooling checks
+        run: |
+          python3 tools/check_config_params.py --quiet
+          python3 -m unittest discover -s tools/tests -p 'test_*.py'
 
       - name: Install rosdep dependencies
         run: |
@@ -48,17 +48,17 @@ jobs:
       - name: Build
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.sh
-          colcon build \
-            --packages-up-to compass_msgs fusioncore_core fusioncore_ros \
-            --cmake-args -DBUILD_TESTING=ON \
+          colcon build \\
+            --packages-up-to compass_msgs fusioncore_core fusioncore_ros \\
+            --cmake-args -DBUILD_TESTING=ON \\
             --event-handlers console_cohesion+
 
       - name: Test
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.sh
           source install/local_setup.bash
-          colcon test \
-            --packages-select compass_msgs fusioncore_core fusioncore_ros \
+          colcon test \\
+            --packages-select compass_msgs fusioncore_core fusioncore_ros \\
             --event-handlers console_direct+
 
       - name: Check test results
