@@ -9,11 +9,11 @@ FusionCore's error grew by more than the allowed threshold.
 
 Feed it metrics.json files produced by tools/evaluate.py --json:
 
-    python3 tools/check_benchmark_regression.py \\
+    python3 tools/check_benchmark_regression.py \
         benchmarks/nclt/2013-04-05/results_fast/metrics.json
 
     # or a whole set at once
-    python3 tools/check_benchmark_regression.py \\
+    python3 tools/check_benchmark_regression.py \
         --glob 'benchmarks/nclt/*/results_fast/metrics.json'
 
 Exit code is non-zero if any sequence regressed, so it can gate CI or a release.
