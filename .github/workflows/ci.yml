@@ -48,17 +48,17 @@ jobs:
       - name: Build
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.sh
-          colcon build \\
-            --packages-up-to compass_msgs fusioncore_core fusioncore_ros \\
-            --cmake-args -DBUILD_TESTING=ON \\
+          colcon build \
+            --packages-up-to compass_msgs fusioncore_core fusioncore_ros \
+            --cmake-args -DBUILD_TESTING=ON \
             --event-handlers console_cohesion+
 
       - name: Test
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.sh
           source install/local_setup.bash
-          colcon test \\
-            --packages-select compass_msgs fusioncore_core fusioncore_ros \\
+          colcon test \
+            --packages-select compass_msgs fusioncore_core fusioncore_ros \
             --event-handlers console_direct+
 
       - name: Check test results
