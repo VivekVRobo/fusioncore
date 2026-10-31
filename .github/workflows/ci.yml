@@ -27,16 +27,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ros-tooling/setup-ros@v0.7
-        with:
-          required-ros-distributions: ${{ matrix.ros_distro }}
-
       # Run the dependency-free checks before installing ROS packages or building.
       # A malformed benchmark payload must never be interpreted as a passing gate.
       - name: Run pre-build configuration and Python tooling checks
         run: |
           python3 tools/check_config_params.py --quiet
           python3 -m unittest discover -s tools/tests -p 'test_*.py'
+
+      - uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: ${{ matrix.ros_distro }}
 
       - name: Install rosdep dependencies
         run: |
