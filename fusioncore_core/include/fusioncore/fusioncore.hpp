@@ -1008,6 +1008,20 @@ enum class SensorHealth {
   NOT_INIT
 };
 
+// Stable names for public enum values. These functions live in the dependency-free
+// core so ROS nodes, tools, and direct library consumers share the same mapping.
+// Switches intentionally omit default cases so -Wswitch can flag new enumerators.
+const char* to_string(sensors::GnssFixType value);
+const char* to_string(HeadingSource value);
+const char* to_string(GnssRejectionReason value);
+const char* to_string(TrackHeadingState value);
+const char* to_string(EncoderRejectionReason value);
+const char* to_string(ImuRejectionReason value);
+const char* to_string(VslamRejectionReason value);
+const char* to_string(HeadingRejectionReason value);
+const char* to_string(MagRejectionReason value);
+const char* to_string(SensorHealth value);
+
 struct FusionCoreStatus {
   bool         initialized          = false;
   SensorHealth imu_health           = SensorHealth::NOT_INIT;
