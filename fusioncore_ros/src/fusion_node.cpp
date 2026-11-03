@@ -3502,13 +3502,7 @@ private:
 
   static const char * encoder_reason_str(fusioncore::EncoderRejectionReason r)
   {
-    switch (r) {
-      case fusioncore::EncoderRejectionReason::NOT_PROCESSED: return "NOT_PROCESSED";
-      case fusioncore::EncoderRejectionReason::ACCEPTED:      return "ACCEPTED";
-      case fusioncore::EncoderRejectionReason::CHI2_FAILED:   return "CHI2_FAILED";
-      case fusioncore::EncoderRejectionReason::NOT_FINITE:    return "NOT_FINITE";
-    }
-    return "unknown";
+    return fusioncore::to_string(r);
   }
 
   // Three gates share imu_outliers, so the count cannot say which one fired.
@@ -3517,50 +3511,26 @@ private:
   // disagreeing with the filter's own attitude. See #124.
   static const char * imu_reason_str(fusioncore::ImuRejectionReason r)
   {
-    switch (r) {
-      case fusioncore::ImuRejectionReason::NOT_PROCESSED:    return "NOT_PROCESSED";
-      case fusioncore::ImuRejectionReason::ACCEPTED:         return "ACCEPTED";
-      case fusioncore::ImuRejectionReason::CHI2_RATE:        return "CHI2_RATE";
-      case fusioncore::ImuRejectionReason::CHI2_ROLL_PITCH:  return "CHI2_ROLL_PITCH";
-      case fusioncore::ImuRejectionReason::CHI2_ORIENTATION: return "CHI2_ORIENTATION";
-      case fusioncore::ImuRejectionReason::NOT_FINITE:       return "NOT_FINITE";
-    }
-    return "unknown";
+    return fusioncore::to_string(r);
   }
 
   static const char * vslam_reason_str(fusioncore::VslamRejectionReason r)
   {
-    switch (r) {
-      case fusioncore::VslamRejectionReason::NOT_PROCESSED: return "NOT_PROCESSED";
-      case fusioncore::VslamRejectionReason::ACCEPTED:      return "ACCEPTED";
-      case fusioncore::VslamRejectionReason::CHI2_FAILED:   return "CHI2_FAILED";
-      case fusioncore::VslamRejectionReason::NOT_FINITE:    return "NOT_FINITE";
-    }
-    return "unknown";
+    return fusioncore::to_string(r);
   }
 
   static const char * heading_reason_str(fusioncore::HeadingRejectionReason r)
   {
-    switch (r) {
-      case fusioncore::HeadingRejectionReason::NOT_PROCESSED: return "NOT_PROCESSED";
-      case fusioncore::HeadingRejectionReason::ACCEPTED:      return "ACCEPTED";
-      case fusioncore::HeadingRejectionReason::CHI2_FAILED:   return "CHI2_FAILED";
-      case fusioncore::HeadingRejectionReason::NOT_FINITE:    return "NOT_FINITE";
-    }
-    return "unknown";
+    return fusioncore::to_string(r);
   }
 
   static const char * heading_source_str(fusioncore::HeadingSource src)
   {
-    switch (src) {
-      case fusioncore::HeadingSource::NONE:            return "no absolute heading";
-      case fusioncore::HeadingSource::DUAL_ANTENNA:    return "DUAL_ANTENNA";
-      case fusioncore::HeadingSource::IMU_ORIENTATION: return "IMU_ORIENTATION (9-axis IMU)";
-      case fusioncore::HeadingSource::GPS_TRACK:       return "GPS_TRACK";
-      case fusioncore::HeadingSource::MAGNETOMETER:    return "MAGNETOMETER";
-    }
-    return "unknown";
+    if (src == fusioncore::HeadingSource::NONE) return "no absolute heading";
+    if (src == fusioncore::HeadingSource::IMU_ORIENTATION) return "IMU_ORIENTATION (9-axis IMU)";
+    return fusioncore::to_string(src);
   }
+
 
   // An absolute heading source outranks GPS track heading, so track heading does
   // not fuse. It is still computed, and comparing the two is the only check on a
@@ -3648,56 +3618,20 @@ private:
   // Converts a GnssRejectionReason enum to the string stored in the message.
   static std::string gnss_reason_str(fusioncore::GnssRejectionReason r)
   {
-    switch (r) {
-      case fusioncore::GnssRejectionReason::ACCEPTED:        return "ACCEPTED";
-      case fusioncore::GnssRejectionReason::FIX_TYPE_LOW:    return "FIX_TYPE_LOW";
-      case fusioncore::GnssRejectionReason::HDOP_HIGH:       return "HDOP_HIGH";
-      case fusioncore::GnssRejectionReason::VDOP_HIGH:       return "VDOP_HIGH";
-      case fusioncore::GnssRejectionReason::MIN_SATS:        return "MIN_SATS";
-      case fusioncore::GnssRejectionReason::CHI2_FAILED:     return "CHI2_FAILED";
-      case fusioncore::GnssRejectionReason::DELAY_TOO_LARGE: return "DELAY_TOO_LARGE";
-      // These three were missing, so every fix the jump gate or the sigma gate
-      // rejected was published as NOT_PROCESSED on /fusion/debug/gnss_status.
-      // A user watching that topic saw fixes vanish with no stated cause, and
-      // so did our own live_monitor.py during the 2026-08-03 field run.
-      case fusioncore::GnssRejectionReason::IMPLAUSIBLE_JUMP: return "IMPLAUSIBLE_JUMP";
-      case fusioncore::GnssRejectionReason::SIGMA_XY_HIGH:   return "SIGMA_XY_HIGH";
-      case fusioncore::GnssRejectionReason::CONTINUITY_BREAK: return "CONTINUITY_BREAK";
-      case fusioncore::GnssRejectionReason::SIGMA_Z_HIGH:    return "SIGMA_Z_HIGH";
-      case fusioncore::GnssRejectionReason::NOT_FINITE:      return "NOT_FINITE";
-      case fusioncore::GnssRejectionReason::QUALITY_OTHER:   return "QUALITY_OTHER";
-      case fusioncore::GnssRejectionReason::NOT_PROCESSED:   return "NOT_PROCESSED";
-    }
-    return "NOT_PROCESSED";
+    return fusioncore::to_string(r);
   }
 
   // Converts a TrackHeadingState enum to the string stored in the message.
   static std::string track_heading_state_str(fusioncore::TrackHeadingState s)
   {
-    switch (s) {
-      case fusioncore::TrackHeadingState::NOT_ATTEMPTED:     return "NOT_ATTEMPTED";
-      case fusioncore::TrackHeadingState::FUSED:             return "FUSED";
-      case fusioncore::TrackHeadingState::STRONGER_SOURCE:   return "STRONGER_SOURCE";
-      case fusioncore::TrackHeadingState::MOTION_UNSUITABLE: return "MOTION_UNSUITABLE";
-      case fusioncore::TrackHeadingState::BASELINE_SHORT:    return "BASELINE_SHORT";
-      case fusioncore::TrackHeadingState::SIGMA_HIGH:        return "SIGMA_HIGH";
-      case fusioncore::TrackHeadingState::CHI2_FAILED:       return "CHI2_FAILED";
-      case fusioncore::TrackHeadingState::WINDOW_HAD_TURN:   return "WINDOW_HAD_TURN";
-    }
-    return "NOT_ATTEMPTED";
+    return fusioncore::to_string(s);
   }
 
   static std::string mag_reason_str(fusioncore::MagRejectionReason r)
   {
-    switch (r) {
-      case fusioncore::MagRejectionReason::CHI2_FAILED:     return "CHI2_FAILED";
-      case fusioncore::MagRejectionReason::FIELD_MAGNITUDE: return "FIELD_MAGNITUDE";
-      case fusioncore::MagRejectionReason::NOT_FINITE:      return "NOT_FINITE";
-      case fusioncore::MagRejectionReason::NOT_PROCESSED:   return "NOT_PROCESSED";
-      case fusioncore::MagRejectionReason::ACCEPTED:        return "ACCEPTED";
-    }
-    return "NOT_PROCESSED";
+    return fusioncore::to_string(r);
   }
+
 
   // Publishes /fusion/debug/gnss_status from the debug struct the core just populated.
   // Called from gnss_callback and gps_fix_callback immediately after update_gnss().
@@ -4015,12 +3949,10 @@ private:
     };
 
     auto health_to_str = [](fusioncore::SensorHealth h) -> std::string {
-      switch (h) {
-        case fusioncore::SensorHealth::OK:       return "OK";
-        case fusioncore::SensorHealth::STALE:    return "STALE: no recent data";
-        case fusioncore::SensorHealth::NOT_INIT: return "Not yet initialized";
-      }
-      return "Unknown";
+      if (h == fusioncore::SensorHealth::STALE)
+        return std::string(fusioncore::to_string(h)) + ": no recent data";
+      if (h == fusioncore::SensorHealth::NOT_INIT) return "Not yet initialized";
+      return fusioncore::to_string(h);
     };
 
     // IMU
@@ -4073,14 +4005,9 @@ private:
 
     // Filter
     auto heading_src_str = [](fusioncore::HeadingSource src) -> std::string {
-      switch (src) {
-        case fusioncore::HeadingSource::NONE:            return "NONE: lever arm inactive";
-        case fusioncore::HeadingSource::DUAL_ANTENNA:    return "DUAL_ANTENNA";
-        case fusioncore::HeadingSource::IMU_ORIENTATION: return "IMU_ORIENTATION (9-axis)";
-        case fusioncore::HeadingSource::GPS_TRACK:       return "GPS_TRACK";
-        case fusioncore::HeadingSource::MAGNETOMETER:    return "MAGNETOMETER";
-      }
-      return "Unknown";
+      if (src == fusioncore::HeadingSource::NONE) return "NONE: lever arm inactive";
+      if (src == fusioncore::HeadingSource::IMU_ORIENTATION) return "IMU_ORIENTATION (9-axis)";
+      return fusioncore::to_string(src);
     };
 
     uint8_t filter_level = diagnostic_msgs::msg::DiagnosticStatus::OK;
