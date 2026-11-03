@@ -22,6 +22,7 @@ add_library(fusioncore_core STATIC
   src/ukf.cpp
   src/fusioncore.cpp
   src/motion_model.cpp
+  src/enum_strings.cpp
 )
 
 target_include_directories(fusioncore_core PUBLIC
@@ -100,6 +101,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_outcome_tally tests/test_outcome_tally.cpp TIMEOUT 300)
   target_link_libraries(test_outcome_tally fusioncore_core Eigen3::Eigen)
+
+  ament_add_gtest(test_enum_strings tests/test_enum_strings.cpp)
+  target_link_libraries(test_enum_strings fusioncore_core Eigen3::Eigen)
 
   ament_add_gtest(test_idle_drift tests/test_idle_drift.cpp TIMEOUT 300)
   target_link_libraries(test_idle_drift fusioncore_core Eigen3::Eigen)
