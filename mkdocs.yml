@@ -67,6 +67,7 @@ nav:
   - Getting Started: getting-started.md
   - Docker: docker.md
   - Configuration: configuration.md
+  - GNSS geodesy & noise semantics: geodesy.md
   - Hardware:
     - Overview & Configs: hardware/index.md
     - Indoor / Wheels only (no GPS): hardware/wheels-indoor.md
