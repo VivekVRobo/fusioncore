@@ -91,10 +91,13 @@ fusioncore:
     # rather than writing a launch remap.
     gnss.fix_topic: "/gnss/fix"  # e.g. "/fix", "/ublox/fix", "/gps/fix"
 
-    gnss.base_noise_xy: 1.0     # m: baseline sigma at HDOP=1
-                                # scaled automatically by HDOP from the message
-                                # standard autonomous GPS: 1.0–2.5
-                                # RTK float: 0.5,  RTK fixed: 0.015
+    gnss.base_noise_xy: 1.0     # see docs/geodesy.md and GPS Receiver Setup below
+                                # DOP path: metres per unit DOP (sigma_xy = base_noise_xy * HDOP)
+                                # covariance path: dimensionless multiplier on receiver sigma
+                                # standard autonomous GPS: 1.0–2.5 on DOP path
+                                # RTK float: 0.5, RTK fixed: 0.015 on DOP path
+                                # With position_covariance_type >= 1, this is NOT metres:
+                                # it scales the sigma derived from the receiver covariance.
     gnss.base_noise_z: 2.0      # m
     gnss.heading_noise: 0.02    # rad: for dual antenna heading
 
