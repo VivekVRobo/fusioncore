@@ -342,6 +342,9 @@ public:
     declare_parameter("magnetometer.noise_rad",      0.05);
     declare_parameter("magnetometer.chi2_threshold", 9.21);
     declare_parameter("magnetometer.declination_rad", 0.0);
+    // Fixed rotation caused by the physical magnetometer mounting relative to the robot body (rad).
+    // Unlike declination, this does not depend on geographic location.
+    declare_parameter("magnetometer.mount_yaw_offset_rad", 0.0);
     // Hard iron bias (Tesla): [bx, by, bz]. Estimated from calibration.
     declare_parameter("magnetometer.hard_iron",
       std::vector<double>{0.0, 0.0, 0.0});
@@ -623,6 +626,7 @@ public:
     config.mag.noise_rad      = get_parameter("magnetometer.noise_rad").as_double();
     config.mag.chi2_threshold = get_parameter("magnetometer.chi2_threshold").as_double();
     config.mag.declination_rad = get_parameter("magnetometer.declination_rad").as_double();
+    config.mag.mount_yaw_offset_rad = get_parameter("magnetometer.mount_yaw_offset_rad").as_double();
     config.mag.field_strength  = get_parameter("magnetometer.field_strength").as_double();
     config.mag.field_tolerance = get_parameter("magnetometer.field_tolerance").as_double();
 
