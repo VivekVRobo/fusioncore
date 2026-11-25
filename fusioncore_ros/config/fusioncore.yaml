@@ -230,6 +230,10 @@ fusioncore:
     # Leave at 0.0 if you are using GPS track heading to anchor the filter: the
     # constant offset is absorbed over time.
     magnetometer.declination_rad: 0.0
+    # Fixed rotation caused by the physical magnetometer mounting relative to the robot body (rad).
+    # Unlike declination, this does not depend on geographic location. Measure it against a
+    # known robot heading and keep it separate from magnetic declination.
+    magnetometer.mount_yaw_offset_rad: 0.0
 
     # Hard iron correction (Tesla): constant bias offset in body frame.
     # Calibrate using imu_calib or by rotating the sensor through a full circle.
