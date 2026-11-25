@@ -62,6 +62,19 @@ TEST(MagnetometerTest, DeclinationOffset) {
   EXPECT_NEAR(yaw, 0.1, 1e-9);
 }
 
+// ─── Test 5: Mounting offset is independent from magnetic declination ─────────
+
+TEST(MagnetometerTest, MountYawOffsetAndDeclinationAdd) {
+  MagParams p;
+  p.mount_yaw_offset_rad = 0.2;
+  p.declination_rad = 0.1;
+  // The sensor is physically rotated by +0.2 rad and local magnetic declination
+  // contributes another +0.1 rad. The two offsets have distinct meanings but
+  // both contribute to the final true heading.
+  double yaw = mag_yaw_from_field(0.0, 1.0, 0.0, p, 0.0, 0.0);
+  EXPECT_NEAR(yaw, 0.3, 1e-9);
+}
+
 // ─── Test 5: Hard iron correction ────────────────────────────────────────────
 
 TEST(MagnetometerTest, HardIronCorrection) {
