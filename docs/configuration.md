@@ -187,6 +187,11 @@ fusioncore:
     # Leave 0.0 when FusionCore can self-correct via GPS: the constant heading
     # offset is absorbed by the filter over time.
 
+    magnetometer.mount_yaw_offset_rad: 0.0
+    # Fixed rotation caused by the physical magnetometer mounting relative to the robot body (rad).
+    # Unlike declination, this does not depend on geographic location. Measure it against a
+    # known robot heading and keep it separate from magnetic declination.
+
     magnetometer.hard_iron: [0.0, 0.0, 0.0]
     # Constant bias offset in body frame (Tesla): [x, y, z].
     # Estimated by rotating the sensor through a full circle and computing
