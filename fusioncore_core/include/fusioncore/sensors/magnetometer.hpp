@@ -37,6 +37,12 @@ struct MagParams {
   // outages: the filter self-corrects for the constant offset via GPS.
   double declination_rad = 0.0;
 
+  // Fixed yaw rotation from the magnetometer frame to the robot body frame (rad).
+  // Unlike magnetic declination, this value is determined by the physical sensor mounting
+  // and does not change with geographic location. Positive values rotate the corrected
+  // magnetic heading before declination is applied.
+  double mount_yaw_offset_rad = 0.0;
+
   // Hard iron correction: constant bias offset in body frame (Tesla).
   // Estimated once using imu_calib or magneto, or by rotating the sensor
   // through a full circle and computing (max + min) / 2 per axis.
@@ -108,7 +114,7 @@ inline double mag_yaw_from_field(
   const double my_h = cy * std::cos(r)
                     - cz * std::sin(r);
 
-  double yaw = std::atan2(mx_h, my_h) + p.declination_rad;
+  double yaw = std::atan2(mx_h, my_h) + p.mount_yaw_offset_rad + p.declination_rad;
   // Normalize to [-pi, pi]
   return std::atan2(std::sin(yaw), std::cos(yaw));
 }
